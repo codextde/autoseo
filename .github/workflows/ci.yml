@@ -33,7 +33,7 @@ jobs:
       DATABASE_URL: postgres://autoseo:autoseo@localhost:54329/autoseo
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Setup pnpm (version from packageManager in package.json)
         uses: pnpm/action-setup@v4
@@ -68,7 +68,7 @@ jobs:
         working-directory: cloud
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Setup pnpm (version from packageManager in package.json)
         uses: pnpm/action-setup@v4

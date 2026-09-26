@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions & discussion
+    url: https://github.com/codextde/autoseo/discussions
+    about: Ask questions, share ideas, or get help from the community before filing an issue.
+  - name: AutoSEO Cloud support
+    url: mailto:info@codext.de
+    about: Support for AutoSEO Cloud (managed instances at autoseo.codext.de) — billing, provisioning, account issues.
+  - name: Report a security vulnerability
+    url: https://github.com/codextde/autoseo/security/policy
+    about: Please report vulnerabilities privately rather than filing a public issue.

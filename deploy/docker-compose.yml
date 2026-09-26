@@ -1,0 +1,90 @@
+# AutoSEO — self-hosted Docker Compose (prebuilt image from GHCR, no build required).
+#
+# Quick start:
+#   cp .env.example .env   # set DOMAIN and POSTGRES_PASSWORD
+#   docker compose pull
+#   docker compose up -d
+#
+# By default this also runs Caddy, which gets you automatic HTTPS for $DOMAIN with zero extra config.
+# Already have your own reverse proxy (Traefik, nginx, Cloudflare Tunnel, …)? Set COMPOSE_PROFILES=
+# (empty) in .env to skip Caddy — the app is then reachable at 127.0.0.1:${APP_PORT:-3000} for your
+# proxy to target instead. See docs/SELF_HOSTING.md.
+#
+# This file is meant to be used standalone (e.g. via deploy/install.sh) with the published image. To
+# build the app from source instead, use the docker-compose.yml at the repository root (Coolify "Docker
+# Compose" build pack).
+
+services:
+  app:
+    image: ghcr.io/codextde/autoseo:${AUTOSEO_VERSION:-latest}
+    restart: unless-stopped
+    environment:
+      - DOMAIN=${DOMAIN:?Set DOMAIN in .env}
+      - DATABASE_URL=postgres://autoseo:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/autoseo
+      - DATA_DIR=/data
+      # Optional bootstrap settings (see docs/MANAGED_INSTANCES.md) — empty by default. Everything else
+      # is configured in the admin panel after first-run setup.
+      - AUTOSEO_OWNER_EMAIL=${AUTOSEO_OWNER_EMAIL:-}
+      - AUTOSEO_OWNER_NAME=${AUTOSEO_OWNER_NAME:-}
+      - AUTOSEO_WORKSPACE_NAME=${AUTOSEO_WORKSPACE_NAME:-}
+      - AUTOSEO_SMTP_URL=${AUTOSEO_SMTP_URL:-}
+      - AUTOSEO_MAIL_FROM=${AUTOSEO_MAIL_FROM:-}
+    volumes:
+      - autoseo-data:/data
+    ports:
+      # Loopback-only publish. This is what your own reverse proxy targets when Caddy is skipped
+      # (COMPOSE_PROFILES= in .env); when Caddy is enabled it reaches the app over the compose network
+      # instead (app:3000), and this stays a harmless localhost-only binding.
+      - "127.0.0.1:${APP_PORT:-3000}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=autoseo
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      - POSTGRES_DB=autoseo
+    volumes:
+      - autoseo-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U autoseo -d autoseo"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Reverse proxy with automatic HTTPS. Runs by default (profile "proxy" — see COMPOSE_PROFILES in
+  # .env.example). Skip it if you already terminate TLS elsewhere.
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["proxy"]
+    restart: unless-stopped
+    environment:
+      - DOMAIN=${DOMAIN:?Set DOMAIN in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - autoseo-caddy-data:/data
+      - autoseo-caddy-config:/config
+    depends_on:
+      - app
+
+volumes:
+  # The two volumes that matter for backups — see docs/SELF_HOSTING.md#backups.
+  autoseo-data:
+  autoseo-pg:
+  # Caddy's ACME account + issued certificates. Not required for backups (certs re-issue automatically),
+  # but keeping it avoids hitting Let's Encrypt rate limits on every recreate.
+  autoseo-caddy-data:
+  autoseo-caddy-config:

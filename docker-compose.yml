@@ -1,5 +1,7 @@
 # AutoSEO — Docker Compose (works as-is on Coolify: "Docker Compose" build pack).
 # Only DOMAIN is configurable via .env; everything else is configured in the admin panel.
+# Self-hosting without building from source? See deploy/docker-compose.yml — same shape, but pulls the
+# prebuilt image from GHCR (no build step) and bundles a Caddy reverse proxy. Guide: docs/SELF_HOSTING.md.
 services:
   app:
     build:

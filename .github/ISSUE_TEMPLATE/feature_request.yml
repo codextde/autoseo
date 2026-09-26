@@ -1,0 +1,55 @@
+name: Feature request
+description: Suggest an idea or improvement for AutoSEO
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion! For open-ended ideas or "would love if…" discussions, consider starting a
+        [Discussion](https://github.com/codextde/autoseo/discussions) instead — it's easier to iterate on
+        before committing to a specific design here.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: What are you trying to do, and what's missing or awkward today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: What would you like to happen? Sketches, mockups, or example config are welcome.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any workarounds you're using today, or other approaches you thought about.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - AI visibility / GEO
+        - SEO (keywords, rank tracking, audit, backlinks)
+        - Analytics / attribution
+        - Reports
+        - Agent mode / local agents
+        - API / MCP
+        - Admin / settings
+        - Self-hosting / deployment
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Anything else — links, references, related issues.

@@ -1,0 +1,8 @@
+# AutoSEO reverse proxy — automatic HTTPS (Let's Encrypt) for $DOMAIN, forwarding to the app container.
+# Used by the "caddy" service in docker-compose.yml (profile "proxy"). DOMAIN must be publicly resolvable
+# to this server for certificate issuance to succeed; see docs/SELF_HOSTING.md.
+
+{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy app:3000
+}

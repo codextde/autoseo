@@ -5,7 +5,7 @@ import { auditLogs, invitations, jobs, projects, usageEvents, users, workspaces 
 import { getSetting } from "@/server/settings";
 import { spendSince } from "@/server/usage";
 import { env } from "@/server/env";
-import { verifySmtp } from "@/server/email";
+import { usesDefaultMailServer, verifySmtp } from "@/server/email";
 import { availableLlmProviders } from "@/server/ai/llm";
 import { hasOnlineAgent } from "@/server/agents/dispatch";
 import { dfsUserData } from "@/server/dataforseo/client";
@@ -182,10 +182,14 @@ export async function runHealthChecks(force = false): Promise<HealthCheck[]> {
       5 * 60_000,
       async () => {
         const smtp = await getSetting("smtp");
-        if (!smtp.enabled) {
+        const platformDefault = await usesDefaultMailServer();
+        if (!smtp.enabled && !platformDefault) {
           return { key: "smtp", label: "Email", status: "warning", summary: "Not configured", detail: "Sign-in links are written to the server log.", href: "/admin/email" };
         }
         const res = await withTimeout(verifySmtp(), 10_000, "SMTP check");
+        if (res.ok && platformDefault) {
+          return { key: "smtp", label: "Email", status: "ok", summary: "Default mail server", detail: "Configured by the platform (AUTOSEO_SMTP_URL)", href: "/admin/email" };
+        }
         return res.ok
           ? { key: "smtp", label: "Email", status: "ok", summary: smtp.preset === "ses" ? `Amazon SES · ${smtp.sesRegion}` : smtp.host, detail: smtp.fromEmail, href: "/admin/email" }
           : { key: "smtp", label: "Email", status: "error", summary: "Connection failed", detail: res.error, href: "/admin/email" };
@@ -276,7 +280,7 @@ export async function getSetupChecklist() {
   const [{ n: projectCount } = { n: 0 }] = await db.select({ n: sql<number>`count(*)::int` }).from(projects);
   const agentOnline = await hasOnlineAgent("any").catch(() => false);
   return [
-    { key: "email", label: "Configure email delivery", description: "SMTP or Amazon SES for magic links and invitations.", done: smtp.enabled && !!smtp.fromEmail, href: "/admin/email" },
+    { key: "email", label: "Configure email delivery", description: "SMTP or Amazon SES for magic links and invitations.", done: (smtp.enabled && !!smtp.fromEmail) || (await usesDefaultMailServer()), href: "/admin/email" },
     { key: "domains", label: "Restrict sign-in to your domains", description: "Only invited people from allowed domains can sign in.", done: auth.allowedDomains.length > 0, href: "/admin/auth" },
     {
       key: "ai",

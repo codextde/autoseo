@@ -40,4 +40,17 @@ export const env = {
   /** Build metadata injected at image build time (used for agent auto-update). */
   buildCommit: process.env.BUILD_COMMIT || buildInfo.commit || "dev",
   buildDate: process.env.BUILD_DATE || buildInfo.date || new Date(0).toISOString(),
+  /**
+   * Optional bootstrap values for unattended installs and AutoSEO Cloud instances
+   * (docs/MANAGED_INSTANCES.md). The admin panel always wins once configured.
+   */
+  bootstrap: {
+    ownerEmail: process.env.AUTOSEO_OWNER_EMAIL?.trim() || null,
+    ownerName: process.env.AUTOSEO_OWNER_NAME?.trim() || null,
+    workspaceName: process.env.AUTOSEO_WORKSPACE_NAME?.trim() || null,
+    smtpUrl: process.env.AUTOSEO_SMTP_URL?.trim() || null,
+    mailFrom: process.env.AUTOSEO_MAIL_FROM?.trim() || null,
+    ssoSecret: process.env.AUTOSEO_SSO_SECRET?.trim() || null,
+    cloudUrl: process.env.AUTOSEO_CLOUD_URL?.trim().replace(/\/+$/, "") || null,
+  },
 };

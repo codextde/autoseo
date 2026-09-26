@@ -1,6 +1,7 @@
 import Link from "next/link";
-import { ArrowRight, CheckCircle2, Circle, FolderKanban, GitCommitHorizontal, ListChecks, Users, Wallet } from "lucide-react";
+import { ArrowRight, CheckCircle2, Circle, CreditCard, FolderKanban, GitCommitHorizontal, ListChecks, Users, Wallet } from "lucide-react";
 import { requireAdmin } from "@/server/auth/guards";
+import { env } from "@/server/env";
 import { getOverviewStats, getSetupChecklist } from "@/server/admin/overview";
 import { Panel } from "@/components/app/page";
 import { StatCard, Meter } from "@/components/app/metrics";
@@ -28,11 +29,20 @@ export default async function AdminOverviewPage() {
       title={`Welcome back, ${firstName}`}
       description="Instance overview — people, projects, background work and spend at a glance."
       actions={
-        <Button asChild variant="outline" size="sm" className="gap-1.5">
-          <Link href="/admin/invitations">
-            <Users className="size-3.5" /> Invite people
-          </Link>
-        </Button>
+        <>
+          {env.bootstrap.cloudUrl && (
+            <Button asChild variant="ghost" size="sm" className="gap-1.5">
+              <a href={`${env.bootstrap.cloudUrl}/dashboard`}>
+                <CreditCard className="size-3.5" /> Manage subscription
+              </a>
+            </Button>
+          )}
+          <Button asChild variant="outline" size="sm" className="gap-1.5">
+            <Link href="/admin/invitations">
+              <Users className="size-3.5" /> Invite people
+            </Link>
+          </Button>
+        </>
       }
     >
       {open.length > 0 && (

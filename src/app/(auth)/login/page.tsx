@@ -25,6 +25,12 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
         </div>
       }
     >
+      {sp.error === "sso" && (
+        <p className="mb-4 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          That one-click sign-in link is invalid or expired. Open the instance again from your dashboard or sign in
+          with your email below.
+        </p>
+      )}
       <LoginForm next={next} appName={brand.appName} />
     </AuthSplitLayout>
   );

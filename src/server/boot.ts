@@ -7,6 +7,7 @@ import { env } from "@/server/env";
 import { getMasterKey } from "@/server/crypto";
 import { ensureBuiltinRoles } from "@/server/auth/membership";
 import { ensureSetupCode } from "@/server/setup";
+import { bootstrapOwnerFromEnv } from "@/server/bootstrap";
 
 declare global {
   var __autoseoBooted: Promise<void> | undefined;
@@ -49,6 +50,7 @@ async function boot() {
     console.warn("[boot] no migrations found in", migrationsFolder);
   }
   await ensureBuiltinRoles();
+  await bootstrapOwnerFromEnv();
   await ensureSetupCode(true);
   const { startWorker } = await import("@/server/jobs/worker");
   await startWorker();

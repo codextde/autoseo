@@ -1,5 +1,5 @@
 import "server-only";
-import nodemailer from "nodemailer";
+import nodemailer, { type Transporter } from "nodemailer";
 import { getSetting } from "@/server/settings";
 import { env } from "@/server/env";
 
@@ -12,21 +12,38 @@ export type MailInput = {
 
 export type MailResult = { delivered: boolean; transport: "smtp" | "log"; messageId?: string; error?: string };
 
-async function buildTransport() {
+type Transport = { from: string; replyTo?: string; transporter: Transporter };
+
+async function buildTransport(): Promise<Transport | null> {
   const smtp = await getSetting("smtp");
-  if (!smtp.enabled) return null;
   const host = smtp.preset === "ses" ? `email-smtp.${smtp.sesRegion}.amazonaws.com` : smtp.host;
-  if (!host || !smtp.fromEmail) return null;
-  return {
-    smtp,
-    transporter: nodemailer.createTransport({
-      host,
-      port: smtp.port,
-      secure: smtp.secure || smtp.port === 465,
-      auth: smtp.user ? { user: smtp.user, pass: smtp.password } : undefined,
-      requireTLS: !smtp.secure && smtp.port === 587,
-    }),
-  };
+  if (smtp.enabled && host && smtp.fromEmail) {
+    return {
+      from: smtp.fromName ? `"${smtp.fromName.replace(/"/g, "")}" <${smtp.fromEmail}>` : smtp.fromEmail,
+      replyTo: smtp.replyTo || undefined,
+      transporter: nodemailer.createTransport({
+        host,
+        port: smtp.port,
+        secure: smtp.secure || smtp.port === 465,
+        auth: smtp.user ? { user: smtp.user, pass: smtp.password } : undefined,
+        requireTLS: !smtp.secure && smtp.port === 587,
+      }),
+    };
+  }
+  return defaultTransport();
+}
+
+/** Platform default from AUTOSEO_SMTP_URL / AUTOSEO_MAIL_FROM, used until Admin → Email is configured. */
+function defaultTransport(): Transport | null {
+  const { smtpUrl, mailFrom } = env.bootstrap;
+  if (!smtpUrl || !mailFrom) return null;
+  return { from: mailFrom, transporter: nodemailer.createTransport(smtpUrl) };
+}
+
+/** True when mail goes out through the AUTOSEO_SMTP_URL default instead of the admin panel settings. */
+export async function usesDefaultMailServer(): Promise<boolean> {
+  const smtp = await getSetting("smtp");
+  return !smtp.enabled && defaultTransport() !== null;
 }
 
 /**
@@ -43,9 +60,9 @@ export async function sendMail(input: MailInput): Promise<MailResult> {
   }
   try {
     const info = await t.transporter.sendMail({
-      from: t.smtp.fromName ? `"${t.smtp.fromName.replace(/"/g, "")}" <${t.smtp.fromEmail}>` : t.smtp.fromEmail,
+      from: t.from,
       to: input.to,
-      replyTo: t.smtp.replyTo || undefined,
+      replyTo: t.replyTo,
       subject: input.subject,
       html: input.html,
       text: input.text,

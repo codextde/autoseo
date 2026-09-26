@@ -12,7 +12,7 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["src/**/*.test.ts", "src/**/*.test.tsx", "test/**/*.test.ts"],
-    exclude: ["node_modules", ".next", "data"],
+    exclude: ["node_modules", ".next", "data", "cloud"],
     testTimeout: 20_000,
   },
 });

@@ -1,0 +1,44 @@
+# AutoSEO Cloud — Docker Compose for Coolify ("Docker Compose" build pack, base directory /cloud).
+# Only DOMAIN and ADMIN_EMAILS are configurable here; Stripe, Coolify and SMTP are set up in /admin.
+services:
+  cloud:
+    build:
+      context: .
+    restart: unless-stopped
+    environment:
+      # Coolify: set the domain (https://autoseo.codext.de) on this service; it also exposes SERVICE_FQDN_CLOUD_3000.
+      - SERVICE_FQDN_CLOUD_3000
+      - DOMAIN=${DOMAIN:-autoseo.codext.de}
+      - ADMIN_EMAILS=${ADMIN_EMAILS:-}
+      - DATABASE_URL=postgres://cloud:${SERVICE_PASSWORD_POSTGRES}@postgres:5432/cloud
+      - DATA_DIR=/data
+    volumes:
+      - cloud-data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=cloud
+      - POSTGRES_PASSWORD=${SERVICE_PASSWORD_POSTGRES}
+      - POSTGRES_DB=cloud
+    volumes:
+      - cloud-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cloud -d cloud"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  cloud-data:
+  cloud-pg:

@@ -1,0 +1,96 @@
+/* Marketing-site motion and decoration. Pure CSS (no client JS); every animation respects reduced motion. */
+
+html {
+  scroll-padding-top: 5rem;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  /* Screenshots rise into place as they scroll into view (only where scroll-driven animations exist). */
+  @supports (animation-timeline: view()) {
+    .mk-reveal {
+      animation: mk-reveal linear both;
+      animation-timeline: view();
+      animation-range: entry 0% entry 60%;
+    }
+  }
+
+  .mk-ticker {
+    animation: mk-ticker 12s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+  }
+
+  .mk-float {
+    animation: mk-float 7s ease-in-out infinite;
+  }
+}
+
+@keyframes mk-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(2.5rem) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Five engine names (plus the first one repeated) at 1.25rem line height. */
+@keyframes mk-ticker {
+  0%, 17% { transform: translateY(0); }
+  20%, 37% { transform: translateY(-1.25rem); }
+  40%, 57% { transform: translateY(-2.5rem); }
+  60%, 77% { transform: translateY(-3.75rem); }
+  80%, 97% { transform: translateY(-5rem); }
+  100% { transform: translateY(-6.25rem); }
+}
+
+@keyframes mk-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+
+.mk-hero-glow {
+  background:
+    radial-gradient(60% 55% at 50% 0%, color-mix(in oklch, var(--brand) 16%, transparent), transparent 70%),
+    radial-gradient(40% 40% at 85% 20%, color-mix(in oklch, var(--chart-3) 8%, transparent), transparent 70%);
+}
+
+.mk-grid {
+  background-image:
+    linear-gradient(to right, color-mix(in oklch, var(--foreground) 6%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in oklch, var(--foreground) 6%, transparent) 1px, transparent 1px);
+  background-size: 56px 56px;
+  mask-image: radial-gradient(ellipse 70% 60% at 50% 0%, black 30%, transparent 75%);
+}
+
+.mk-screen-glow {
+  background: radial-gradient(50% 50% at 50% 50%, color-mix(in oklch, var(--brand) 22%, transparent), transparent 70%);
+  filter: blur(40px);
+}
+
+.mk-dark-panel {
+  background:
+    radial-gradient(60% 80% at 100% 0%, oklch(0.63 0.17 152 / 0.22), transparent 60%),
+    radial-gradient(50% 60% at 0% 100%, oklch(0.6 0.15 255 / 0.12), transparent 60%),
+    #141413;
+}
+
+.mk-dots-light {
+  background-image: radial-gradient(oklch(1 0 0 / 0.08) 1px, transparent 1px);
+  background-size: 18px 18px;
+}
+
+/* Native <details> FAQ: rotate the chevron and hide the default marker. */
+.mk-faq summary::-webkit-details-marker {
+  display: none;
+}
+.mk-faq summary {
+  list-style: none;
+}
+.mk-faq[open] .mk-faq-icon {
+  transform: rotate(45deg);
+}

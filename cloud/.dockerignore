@@ -1,0 +1,11 @@
+node_modules
+.next
+data
+.env
+.env.*
+!.env.example
+# Unit tests (one imports the instance-side SSO verifier from the repo root, outside this build context)
+**/*.test.ts
+test
+vitest.config.mts
+*.tsbuildinfo

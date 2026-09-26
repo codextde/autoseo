@@ -44,7 +44,7 @@ const icons: Record<string, LucideIcon> = {
 function FeatureIcon({ name }: { name: string }) {
   const Icon = icons[name] ?? Sparkles;
   return (
-    <span className="grid size-10 place-items-center rounded-xl bg-brand-soft text-green-700 dark:text-green-300">
+    <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-brand-soft text-green-700 dark:text-green-300">
       <Icon className="size-5" aria-hidden="true" />
     </span>
   );
@@ -104,14 +104,15 @@ function FeatureRow({ row, flip }: { row: FeatureRowData; flip: boolean }) {
       aria-labelledby={`${row.id}-title`}
       className="grid scroll-mt-24 items-center gap-10 lg:grid-cols-12 lg:gap-14"
     >
-      <div className={cn("lg:col-span-5", flip && "lg:order-2")}>
+      <div className={cn("min-w-0 lg:col-span-5", flip && "lg:order-2")}>
         <FeatureText {...row} />
       </div>
-      <div className={cn("relative lg:col-span-7", flip && "lg:order-1", row.secondary && "sm:pb-16")}>
-        <BrowserFrame src={row.image.src} alt={row.image.alt} url={row.image.url} />
+      <div className={cn("relative min-w-0 lg:col-span-7", flip && "lg:order-1", row.secondary && "sm:pb-16")}>
+        <BrowserFrame src={row.image.src} darkSrc={row.image.darkSrc} alt={row.image.alt} url={row.image.url} />
         {row.secondary && (
           <BrowserFrame
             src={row.secondary.src}
+            darkSrc={row.secondary.darkSrc}
             alt={row.secondary.alt}
             url={row.secondary.url}
             sizes="(min-width: 1024px) 400px, 60vw"
@@ -140,10 +141,10 @@ export function SeoSuite({ flip = false }: { flip?: boolean }) {
   return (
     <article id={seoSuite.id} aria-labelledby={`${seoSuite.id}-title`} className="scroll-mt-24">
       <div className="grid items-center gap-10 lg:grid-cols-12 lg:gap-14">
-        <div className={cn("lg:col-span-5", flip && "lg:order-2")}>
+        <div className={cn("min-w-0 lg:col-span-5", flip && "lg:order-2")}>
           <FeatureText {...seoSuite} />
         </div>
-        <div className={cn("grid gap-4 lg:col-span-7", flip && "lg:order-1")}>
+        <div className={cn("grid min-w-0 gap-4 lg:col-span-7", flip && "lg:order-1")}>
           <BrowserFrame src={main.src} alt={main.alt} url={main.url} />
           <div className="grid gap-4 sm:grid-cols-2">
             {rest.map((img) => (
@@ -167,15 +168,29 @@ export function Actions() {
     <section aria-labelledby="actions-title" className="pb-20 sm:pb-28">
       <Container>
         <SectionHeading id="actions-title" eyebrow={actions.eyebrow} title={actions.title} />
-        <ul className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {actions.items.map((item) => (
-            <li key={item.title} className="rounded-2xl border bg-card p-6">
-              <FeatureIcon name={item.icon} />
-              <h3 className="mt-5 font-semibold tracking-tight">{item.title}</h3>
-              <p className="mt-2 text-sm leading-6 text-muted-foreground">{item.body}</p>
-            </li>
-          ))}
-        </ul>
+        <div className="mt-14 grid items-center gap-10 lg:grid-cols-12 lg:gap-14">
+          <ul className="grid min-w-0 gap-x-6 gap-y-7 sm:grid-cols-2 lg:col-span-5 lg:grid-cols-1">
+            {actions.items.map((item) => (
+              <li key={item.title} className="flex gap-4">
+                <FeatureIcon name={item.icon} />
+                <div className="min-w-0 flex-1">
+                  <h3 className="font-semibold tracking-tight">{item.title}</h3>
+                  <p className="mt-1 text-sm leading-6 text-muted-foreground">{item.body}</p>
+                </div>
+              </li>
+            ))}
+          </ul>
+          <div className="relative min-w-0 sm:pb-16 lg:col-span-7">
+            <BrowserFrame src={actions.image.src} alt={actions.image.alt} url={actions.image.url} />
+            <BrowserFrame
+              src={actions.secondary.src}
+              alt={actions.secondary.alt}
+              url={actions.secondary.url}
+              sizes="(min-width: 1024px) 400px, 60vw"
+              className="absolute -right-4 bottom-0 hidden w-[58%] sm:block lg:-right-8"
+            />
+          </div>
+        </div>
       </Container>
     </section>
   );
@@ -219,11 +234,11 @@ export function Security() {
   return (
     <article id={security.id} aria-labelledby={`${security.id}-title`} className="scroll-mt-24">
       <div className="grid items-center gap-10 lg:grid-cols-12 lg:gap-14">
-        <div className="lg:col-span-5 lg:order-2">
+        <div className="min-w-0 lg:col-span-5 lg:order-2">
           <FeatureText {...security} />
           <p className="mt-6 text-sm text-muted-foreground">{security.mobileNote}</p>
         </div>
-        <div className="relative lg:col-span-7 lg:order-1">
+        <div className="relative min-w-0 lg:col-span-7 lg:order-1">
           <BrowserFrame src={security.image.src} alt={security.image.alt} url={security.image.url} />
           <PhoneFrame
             src="/screenshots/mobile.png"

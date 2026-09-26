@@ -6,7 +6,10 @@ import { assertAdmin, AuthError } from "@/server/auth/guards";
 import { getSetting, isCoolifyConfigured, updateSetting } from "@/server/settings";
 import { sendMail, verifySmtp } from "@/server/email";
 import { testEmail } from "@/server/email/templates";
-import { connectStripe, cancelSubscriptionNow, stripeModeFromKey } from "@/server/stripe";
+import { connectStripe, cancelSubscriptionNow, settleCheckoutSession, stripeModeFromKey } from "@/server/stripe";
+import { db } from "@/server/db/client";
+import { instances } from "@/server/db/schema";
+import { eq } from "drizzle-orm";
 import { connectionFromSettings, coolify } from "@/server/coolify";
 import { IMAGE_PATTERN, MEMORY_PATTERN } from "@/server/compose";
 import { getInstance } from "@/server/instances";
@@ -27,7 +30,13 @@ const text = (fd: FormData, key: string) => String(fd.get(key) ?? "").trim();
 /* ─────────────────────────────── Email ─────────────────────────────── */
 
 const smtpSchema = z.object({
-  host: z.string().max(253),
+  host: z.union([
+    z.literal(""),
+    z
+      .string()
+      .max(253)
+      .regex(/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$|^\[?[0-9a-f:.]+\]?$/i, "SMTP host must be a hostname or IP address."),
+  ]),
   port: z.coerce.number().int().min(1, "Port must be 1–65535.").max(65535, "Port must be 1–65535."),
   user: z.string().max(320),
   fromName: z.string().max(80),
@@ -123,7 +132,10 @@ export async function connectStripeAction(): Promise<AdminActionState> {
 /* ─────────────────────────────── Coolify ─────────────────────────────── */
 
 const coolifySchema = z.object({
-  baseUrl: z.url("Base URL must be a valid URL.").refine((u) => /^https?:\/\//.test(u), "Base URL must start with https://"),
+  // The API token travels with every request: HTTPS only (plain HTTP just for a Coolify on this machine).
+  baseUrl: z
+    .url("Base URL must be a valid URL.")
+    .refine((u) => /^https:\/\//.test(u) || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/.test(u), "Base URL must start with https://"),
   projectName: z.string().min(1, "Project name is required.").max(100),
   baseDomain: z
     .string()
@@ -218,6 +230,8 @@ export async function adminInstanceAction(instanceId: string, op: InstanceOp): P
     const instance = await getInstance(instanceId);
     if (!instance || instance.status === "deleted") return { error: "Instance not found." };
     const actor = `admin:${user.email}`;
+    // Starting again lifts an admin stop, so billing events manage the instance again.
+    if (op !== "stop") await db.update(instances).set({ stoppedByAdmin: false }).where(eq(instances.id, instance.id));
     let res;
     switch (op) {
       case "provision":
@@ -227,7 +241,7 @@ export async function adminInstanceAction(instanceId: string, op: InstanceOp): P
         res = await provisionInstance(instance.id, actor);
         break;
       case "stop":
-        res = await stopInstance(instance, actor, "admin");
+        res = await stopInstance(instance, actor, "admin", { byAdmin: true });
         break;
       case "restart":
         res = await restartInstance(instance, actor);
@@ -252,7 +266,11 @@ export async function adminDeleteInstanceAction(_prev: AdminActionState, fd: For
     if (!instance || instance.status === "deleted") return { error: "Instance not found." };
     if (text(fd, "confirmSlug") !== instance.slug) return { error: `Type “${instance.slug}” to confirm.` };
     const actor = `admin:${user.email}`;
-    await cancelSubscriptionNow(instance, actor);
+    if (instance.status === "pending_payment" && (await settleCheckoutSession(instance)) === "paid") {
+      return { error: "This order was just paid and is being provisioned — reload and delete it again if needed." };
+    }
+    const canceled = await cancelSubscriptionNow(instance, actor);
+    if (!canceled.ok) return { error: `The subscription couldn't be canceled, so nothing was deleted: ${canceled.error}` };
     const res = await deleteInstance(instance, actor);
     refresh();
     return res.ok ? { ok: true, message: `${instance.slug} was deleted.` } : { error: res.error };

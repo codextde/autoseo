@@ -1,7 +1,9 @@
 import "server-only";
-import { and, eq, isNull, lt } from "drizzle-orm";
+import { and, eq, lt } from "drizzle-orm";
 import { db } from "@/server/db/client";
-import { instances, sessions } from "@/server/db/schema";
+import { instances, sessions, stripeEvents } from "@/server/db/schema";
+import { isSubscriptionLive } from "@/server/billing-rules";
+import { settleCheckoutSession } from "@/server/stripe";
 import { logEvent } from "@/server/events";
 import { purgeExpiredLoginTokens } from "@/server/auth/login";
 import {
@@ -16,8 +18,9 @@ import {
 const TICK_MS = 30_000;
 const RUNNING_CHECK_MS = 10 * 60 * 1000;
 const HOUSEKEEPING_MS = 60 * 60 * 1000;
-/** Checkout sessions expire after 24 h; unpaid reservations release their address after that. */
+/** Unpaid reservations release their address this long after the last checkout was started. */
 const PENDING_TTL_MS = 25 * 60 * 60 * 1000;
+const STRIPE_EVENT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 declare global {
   var __cloudReconciler: { timer: NodeJS.Timeout; busy: boolean; lastRunningCheck: number; lastHousekeeping: number } | undefined;
@@ -49,15 +52,34 @@ async function checkRunningInstances() {
   }
 }
 
-async function housekeeping() {
-  const cutoff = new Date(Date.now() - PENDING_TTL_MS);
+async function releaseStaleReservations() {
+  // `updatedAt` moves whenever a new checkout session is stored, so a resumed checkout keeps its reservation.
   const stale = await db
-    .delete(instances)
-    .where(and(eq(instances.status, "pending_payment"), isNull(instances.stripeSubscriptionId), lt(instances.createdAt, cutoff)))
-    .returning({ id: instances.id, slug: instances.slug, userId: instances.userId });
-  for (const s of stale) await logEvent("instance.reservation_expired", { instanceId: s.id, userId: s.userId, data: { slug: s.slug } });
+    .select()
+    .from(instances)
+    .where(and(eq(instances.status, "pending_payment"), lt(instances.updatedAt, new Date(Date.now() - PENDING_TTL_MS))));
+  for (const row of stale) {
+    if (isSubscriptionLive(row.subscriptionStatus)) continue;
+    try {
+      // A late payment is processed instead of dropped; an open session is expired before the release.
+      if ((await settleCheckoutSession(row)) === "paid") continue;
+    } catch (err) {
+      console.warn(`[reconciler] keeping reservation ${row.slug}: checkout could not be verified`, err);
+      continue;
+    }
+    const [deleted] = await db
+      .delete(instances)
+      .where(and(eq(instances.id, row.id), eq(instances.status, "pending_payment")))
+      .returning({ id: instances.id });
+    if (deleted) await logEvent("instance.reservation_expired", { instanceId: row.id, userId: row.userId, data: { slug: row.slug } });
+  }
+}
+
+async function housekeeping() {
+  await releaseStaleReservations();
   await purgeExpiredLoginTokens();
   await db.delete(sessions).where(lt(sessions.expiresAt, new Date()));
+  await db.delete(stripeEvents).where(lt(stripeEvents.createdAt, new Date(Date.now() - STRIPE_EVENT_RETENTION_MS)));
 }
 
 async function tick() {

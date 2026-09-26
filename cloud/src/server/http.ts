@@ -1,22 +1,21 @@
 import "server-only";
 import { headers } from "next/headers";
 import { env } from "@/server/env";
+import { isCloudflareIp } from "@/server/cloudflare-ips";
 
 export { safeNext } from "@/server/safe-next";
 
 /**
- * Client IP for rate limiting. autoseo.codext.de sits behind Cloudflare, so the edge's
- * `CF-Connecting-IP` is preferred; otherwise Traefik's `X-Real-Ip` / right-most `X-Forwarded-For`.
- * (A forged header only weakens the per-IP limit; the per-email limit still applies.)
+ * Client IP for rate limiting. Traefik sets `X-Real-Ip` to the direct peer. autoseo.codext.de is proxied
+ * by Cloudflare, but the origin is reachable directly too, so the edge's `CF-Connecting-IP` is only
+ * trusted when that peer really is a Cloudflare edge address; otherwise it could be forged.
  */
 export function clientIpFromHeaders(h: Headers): string | null {
-  const cf = h.get("cf-connecting-ip");
-  if (cf) return cf.trim();
-  const real = h.get("x-real-ip");
-  if (real) return real.trim();
   const fwd = h.get("x-forwarded-for");
-  if (fwd) return fwd.split(",").pop()!.trim() || null;
-  return null;
+  const peer = h.get("x-real-ip")?.trim() || (fwd ? fwd.split(",").pop()!.trim() : "") || null;
+  const cf = h.get("cf-connecting-ip")?.trim();
+  if (cf && isCloudflareIp(peer)) return cf;
+  return peer;
 }
 
 export async function getRequestMeta() {

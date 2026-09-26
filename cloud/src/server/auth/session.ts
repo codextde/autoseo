@@ -4,7 +4,7 @@ import { and, eq, gt, isNull, sql } from "drizzle-orm";
 import { cache } from "react";
 import { db } from "@/server/db/client";
 import { sessions, users, type User } from "@/server/db/schema";
-import { randomToken, sha256 } from "@/server/crypto";
+import { randomToken, sha256, timingSafeEqualStr } from "@/server/crypto";
 import { env, isAdminEmail } from "@/server/env";
 import { getRequestMeta } from "@/server/http";
 
@@ -32,15 +32,15 @@ export async function createSession(userId: string): Promise<void> {
 }
 
 async function lookupSession(token: string): Promise<CurrentSession | null> {
-  // The token has 256 bits of entropy and only its hash is stored; lookup by hash is constant-time
-  // with respect to the secret (no prefix comparison on the raw token).
+  // Only the SHA-256 of the 256-bit token is stored; the raw token is never compared.
+  const hash = sha256(token);
   const [row] = await db
     .select({ session: sessions, user: users })
     .from(sessions)
     .innerJoin(users, eq(users.id, sessions.userId))
-    .where(and(eq(sessions.tokenHash, sha256(token)), isNull(sessions.revokedAt), gt(sessions.expiresAt, new Date())))
+    .where(and(eq(sessions.tokenHash, hash), isNull(sessions.revokedAt), gt(sessions.expiresAt, new Date())))
     .limit(1);
-  if (!row) return null;
+  if (!row || !timingSafeEqualStr(row.session.tokenHash, hash)) return null;
   let user = row.user;
   // ADMIN_EMAILS is the source of truth for admin rights; keep the column in sync.
   const admin = isAdminEmail(user.email);
@@ -66,7 +66,8 @@ export async function destroyCurrentSession(): Promise<void> {
   const jar = await cookies();
   const token = jar.get(SESSION_COOKIE)?.value;
   if (token) await db.update(sessions).set({ revokedAt: new Date() }).where(eq(sessions.tokenHash, sha256(token)));
-  jar.delete(SESSION_COOKIE);
+  // Browsers only accept clearing a `__Host-` cookie with the same Secure/Path attributes.
+  jar.delete({ name: SESSION_COOKIE, path: "/", secure: !env.isLocal, httpOnly: true, sameSite: "lax" });
 }
 
 export async function revokeAllSessions(userId: string): Promise<void> {

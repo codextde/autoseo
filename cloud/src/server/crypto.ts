@@ -13,18 +13,21 @@ let cachedKey: Buffer | null = null;
 export function getMasterKey(): Buffer {
   if (cachedKey) return cachedKey;
   const file = path.join(env.dataDir, "secret.key");
+  let existing: string | null = null;
   try {
-    const existing = fs.readFileSync(file, "utf8").trim();
-    if (existing.length >= 64) {
-      cachedKey = Buffer.from(existing, "hex");
-      return cachedKey;
-    }
-  } catch {
-    // generate below
+    existing = fs.readFileSync(file, "utf8").trim();
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+  if (existing !== null) {
+    // Never replace an existing key: every stored credential and instance SSO secret depends on it.
+    if (!/^[0-9a-f]{64}$/i.test(existing)) throw new Error(`${file} is not a valid 32-byte hex key — restore it from a backup.`);
+    cachedKey = Buffer.from(existing, "hex");
+    return cachedKey;
   }
   fs.mkdirSync(env.dataDir, { recursive: true });
   const key = crypto.randomBytes(32);
-  fs.writeFileSync(file, key.toString("hex"), { mode: 0o600 });
+  fs.writeFileSync(file, key.toString("hex"), { mode: 0o600, flag: "wx" });
   cachedKey = key;
   return key;
 }

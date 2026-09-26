@@ -5,7 +5,9 @@ export function safeNext(next: string | null | undefined): string | null {
   try {
     const url = new URL(next, "http://internal.invalid");
     if (url.origin !== "http://internal.invalid") return null;
-    return url.pathname + url.search + url.hash;
+    const out = url.pathname + url.search + url.hash;
+    // Dot segments can collapse into a protocol-relative path ("/.//evil.com" → "//evil.com").
+    return out.startsWith("//") || out.startsWith("/\\") ? null : out;
   } catch {
     return null;
   }

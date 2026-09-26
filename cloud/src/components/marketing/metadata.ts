@@ -26,7 +26,8 @@ const defaultImage = {
  */
 export function pageMetadata({ title, description, path, absolute, ownImage }: PageMeta): Metadata {
   const fullTitle = absolute ? title : `${title} · ${site.name}`;
-  const images = ownImage ? undefined : [defaultImage];
+  // Leave the key out entirely for routes with their own opengraph-image file; even `images: undefined` suppresses it.
+  const images = ownImage ? {} : { images: [defaultImage] };
   return {
     title: absolute ? { absolute: title } : title,
     description,
@@ -38,8 +39,8 @@ export function pageMetadata({ title, description, path, absolute, ownImage }: P
       url: path,
       title: fullTitle,
       description,
-      images,
+      ...images,
     },
-    twitter: { card: "summary_large_image", title: fullTitle, description, images },
+    twitter: { card: "summary_large_image", title: fullTitle, description, ...images },
   };
 }

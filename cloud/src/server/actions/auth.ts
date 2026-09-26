@@ -10,7 +10,7 @@ import { destroyCurrentSession, revokeAllSessions } from "@/server/auth/session"
 import { getUserInstance } from "@/server/instances";
 import { isSubscriptionLive } from "@/server/billing-rules";
 import { deleteInstance } from "@/server/provisioning";
-import { expireCheckoutSession } from "@/server/stripe";
+import { BillingError, settleCheckoutSession } from "@/server/stripe";
 import { logEvent } from "@/server/events";
 
 export type LoginState =
@@ -66,7 +66,9 @@ export async function deleteAccountAction(_prev: ActionResult, formData: FormDat
     }
     if (instance) {
       if (instance.status === "pending_payment") {
-        if (instance.stripeCheckoutSessionId) await expireCheckoutSession(instance.stripeCheckoutSessionId);
+        if ((await settleCheckoutSession(instance)) === "paid") {
+          return { error: "Your payment just went through, so your instance is being set up. Cancel the subscription first to delete your account." };
+        }
         await db.delete(instances).where(eq(instances.id, instance.id));
       } else {
         const res = await deleteInstance(instance, `customer:${user.id}`);
@@ -78,7 +80,7 @@ export async function deleteAccountAction(_prev: ActionResult, formData: FormDat
     await db.delete(users).where(eq(users.id, user.id));
     await destroyCurrentSession();
   } catch (err) {
-    if (err instanceof AuthError) return { error: err.message };
+    if (err instanceof AuthError || err instanceof BillingError) return { error: err.message };
     console.error("[account] delete failed", err);
     return { error: "Something went wrong. Please try again." };
   }

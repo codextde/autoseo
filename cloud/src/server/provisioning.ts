@@ -1,5 +1,5 @@
 import "server-only";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { db } from "@/server/db/client";
 import { instances, users, type Instance } from "@/server/db/schema";
 import { decryptJson, encryptJson } from "@/server/crypto";
@@ -116,11 +116,13 @@ async function runProvision(instanceId: string, actor: string): Promise<Provisio
   if (instance.status === "deleted") return { ok: false, error: "This instance was deleted." };
 
   if (instance.status !== "provisioning") {
-    [instance] = await db
+    const [updated] = await db
       .update(instances)
       .set({ status: "provisioning", error: null, startRequestedAt: null })
-      .where(eq(instances.id, instanceId))
+      .where(and(eq(instances.id, instanceId), ne(instances.status, "deleted")))
       .returning();
+    if (!updated) return { ok: false, error: "This instance was deleted." };
+    instance = updated;
   }
   await logEvent("instance.provision_started", { instanceId, userId: instance.userId, data: { actor, attempt: instance.provisionAttempts + 1 } });
 
@@ -137,8 +139,11 @@ async function runProvision(instanceId: string, actor: string): Promise<Provisio
     let serviceUuid = instance.coolifyServiceUuid;
     if (!serviceUuid) {
       const projectUuid = await ensureCoolifyProject(conn, settings);
-      // Adopt a service left behind by an interrupted run instead of creating a duplicate.
-      const existing = (await coolify.listServices(conn)).find((s) => s.name === serviceName(instance!.slug));
+      // Adopt a service left behind by an interrupted run of *this* instance (its id is in the description)
+      // instead of creating a duplicate — never one of a previous owner of the same address.
+      const existing = (await coolify.listServices(conn)).find(
+        (s) => s.name === serviceName(instance!.slug) && (s.description ?? "").includes(instanceId),
+      );
       if (existing) {
         serviceUuid = existing.uuid;
         await logEvent("instance.service_adopted", { instanceId, data: { serviceUuid } });
@@ -146,6 +151,7 @@ async function runProvision(instanceId: string, actor: string): Promise<Provisio
         const created = await coolify.createService(
           conn,
           buildCreateServiceBody({
+            instanceId,
             slug: instance.slug,
             host: instance.host,
             ownerEmail: owner.email,
@@ -168,11 +174,24 @@ async function runProvision(instanceId: string, actor: string): Promise<Provisio
     await coolify.setServiceEnvs(conn, serviceUuid, await instanceEnv(instance, owner));
     await logEvent("instance.env_applied", { instanceId });
 
+    // A stop or delete may have landed while we were configuring: don't start it behind its back.
+    const [current] = await db.select({ status: instances.status }).from(instances).where(eq(instances.id, instanceId));
+    if (current?.status !== "provisioning") {
+      await logEvent("instance.provision_aborted", { instanceId, data: { status: current?.status ?? "missing" } });
+      return { ok: false, error: `Provisioning stopped: the instance is now ${current?.status ?? "gone"}.` };
+    }
     await coolify.startService(conn, serviceUuid);
-    await db
+    const [started] = await db
       .update(instances)
       .set({ startRequestedAt: new Date(), provisionAttempts: 0, nextProvisionAt: null, error: null })
-      .where(eq(instances.id, instanceId));
+      .where(and(eq(instances.id, instanceId), eq(instances.status, "provisioning")))
+      .returning({ id: instances.id });
+    if (!started) {
+      // Stopped/deleted during the start call: undo the start.
+      await coolify.stopService(conn, serviceUuid).catch(() => undefined);
+      await logEvent("instance.provision_aborted", { instanceId, data: { reason: "state changed during start" } });
+      return { ok: false, error: "Provisioning stopped: the instance changed state." };
+    }
     await logEvent("instance.start_requested", { instanceId, data: { serviceUuid } });
     return { ok: true };
   } catch (err) {
@@ -184,7 +203,7 @@ async function runProvision(instanceId: string, actor: string): Promise<Provisio
     await db
       .update(instances)
       .set({ provisionAttempts: attempts, nextProvisionAt, error: message, ...(failed ? { status: "failed" as const } : {}) })
-      .where(eq(instances.id, instanceId));
+      .where(and(eq(instances.id, instanceId), eq(instances.status, "provisioning")));
     await logEvent(failed ? "instance.failed" : "instance.provision_error", {
       instanceId,
       userId: instance.userId,
@@ -216,14 +235,20 @@ async function withService<T>(instance: Instance, fn: (conn: CoolifyConnection, 
   return fn(connectionFromSettings(settings), instance.coolifyServiceUuid);
 }
 
-/** Stops the containers (data volumes are kept). */
-export async function stopInstance(instance: Instance, actor: string, reason: string): Promise<ProvisionResult> {
+/** Stops the containers (data volumes are kept). `byAdmin` keeps billing events from starting it again. */
+export async function stopInstance(
+  instance: Instance,
+  actor: string,
+  reason: string,
+  opts: { byAdmin?: boolean } = {},
+): Promise<ProvisionResult> {
   try {
-    if (instance.coolifyServiceUuid) await withService(instance, (conn, uuid) => coolify.stopService(conn, uuid));
+    // Mark first so a concurrent provisioning run sees the stop before it starts the service.
     await db
       .update(instances)
-      .set({ status: "stopped", startRequestedAt: null, nextProvisionAt: null, error: null })
-      .where(eq(instances.id, instance.id));
+      .set({ status: "stopped", stoppedByAdmin: !!opts.byAdmin, startRequestedAt: null, nextProvisionAt: null, error: null })
+      .where(and(eq(instances.id, instance.id), ne(instances.status, "deleted")));
+    if (instance.coolifyServiceUuid) await withService(instance, (conn, uuid) => coolify.stopService(conn, uuid));
     await logEvent("instance.stopped", { instanceId: instance.id, userId: instance.userId, data: { actor, reason } });
     return { ok: true };
   } catch (err) {
@@ -249,8 +274,8 @@ export async function restartInstance(instance: Instance, actor: string, opts: {
     });
     await db
       .update(instances)
-      .set({ status: "provisioning", startRequestedAt: new Date(), error: null })
-      .where(eq(instances.id, instance.id));
+      .set({ status: "provisioning", stoppedByAdmin: false, startRequestedAt: new Date(), error: null })
+      .where(and(eq(instances.id, instance.id), ne(instances.status, "deleted")));
     await logEvent(opts.latest ? "instance.redeployed" : "instance.restarted", { instanceId: instance.id, userId: instance.userId, data: { actor } });
     return { ok: true };
   } catch (err) {
@@ -293,10 +318,13 @@ export async function deleteInstance(instance: Instance, actor: string): Promise
 export async function markInstanceHealthy(instance: Instance): Promise<void> {
   const now = new Date();
   const wasRunning = instance.status === "running";
-  await db
+  // Conditional: a stop/delete that landed during the (slow) health check wins.
+  const [updated] = await db
     .update(instances)
     .set({ status: "running", lastHealthAt: now, lastHealthOk: true, error: null })
-    .where(eq(instances.id, instance.id));
+    .where(and(eq(instances.id, instance.id), inArray(instances.status, ["provisioning", "running"])))
+    .returning({ id: instances.id });
+  if (!updated) return;
   if (!wasRunning) await logEvent("instance.running", { instanceId: instance.id, userId: instance.userId, data: { host: instance.host } });
   else if (instance.lastHealthOk === false) await logEvent("instance.healthy_again", { instanceId: instance.id });
 
@@ -319,16 +347,24 @@ export async function markInstanceHealthy(instance: Instance): Promise<void> {
 }
 
 export async function markInstanceUnhealthy(instance: Instance): Promise<void> {
-  await db.update(instances).set({ lastHealthOk: false }).where(eq(instances.id, instance.id));
-  if (instance.lastHealthOk !== false) {
+  const [updated] = await db
+    .update(instances)
+    .set({ lastHealthOk: false })
+    .where(and(eq(instances.id, instance.id), eq(instances.status, "running")))
+    .returning({ id: instances.id });
+  if (updated && instance.lastHealthOk !== false) {
     await logEvent("instance.unhealthy", { instanceId: instance.id, userId: instance.userId, data: { host: instance.host } });
   }
 }
 
 export async function markStartTimedOut(instance: Instance): Promise<void> {
   const error = "The instance did not become healthy within 20 minutes. Check the service logs in Coolify, then retry.";
-  await db.update(instances).set({ status: "failed", error }).where(eq(instances.id, instance.id));
-  await logEvent("instance.failed", { instanceId: instance.id, userId: instance.userId, data: { error } });
+  const [updated] = await db
+    .update(instances)
+    .set({ status: "failed", error })
+    .where(and(eq(instances.id, instance.id), eq(instances.status, "provisioning")))
+    .returning({ id: instances.id });
+  if (updated) await logEvent("instance.failed", { instanceId: instance.id, userId: instance.userId, data: { error } });
 }
 
 export { checkInstanceHealth };

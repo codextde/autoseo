@@ -8,7 +8,22 @@ describe("safeNext", () => {
   });
 
   it("rejects absolute, protocol-relative and tricky targets", () => {
-    for (const next of ["https://evil.com", "//evil.com", "/\\evil.com", "\\\\evil.com", "javascript:alert(1)", "/ /evil", "dashboard", "", null, undefined]) {
+    for (const next of [
+      "https://evil.com",
+      "//evil.com",
+      "/\\evil.com",
+      "\\\\evil.com",
+      "javascript:alert(1)",
+      "/ /evil",
+      "dashboard",
+      "/.//evil.com",
+      "/..//evil.com",
+      "/%2e%2e//evil.com",
+      "/a/../..//evil.com",
+      "",
+      null,
+      undefined,
+    ]) {
       expect(safeNext(next as string), String(next)).toBeNull();
     }
   });

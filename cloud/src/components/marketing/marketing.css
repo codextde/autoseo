@@ -94,3 +94,22 @@ html {
 .mk-faq[open] .mk-faq-icon {
   transform: rotate(45deg);
 }
+
+/* Mobile menu panel (native popover): slides in from the right, dims the page behind it. */
+.mk-sheet::backdrop {
+  background: oklch(0 0 0 / 0.25);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .mk-sheet {
+    transition: translate 0.22s ease, display 0.22s allow-discrete, overlay 0.22s allow-discrete;
+    translate: 100% 0;
+  }
+  .mk-sheet:popover-open {
+    translate: 0 0;
+  }
+  @starting-style {
+    .mk-sheet:popover-open {
+      translate: 100% 0;
+    }
+  }
+}

@@ -76,7 +76,7 @@ export function SecretField({
       htmlFor={name}
       hint={
         <>
-          {saved ? "Leave empty to keep the saved value. " : null}
+          {saved ? "Saved. Enter a new value to replace it, or leave empty to keep it. " : null}
           {hint}
         </>
       }
@@ -89,7 +89,7 @@ export function SecretField({
           type="password"
           autoComplete="off"
           spellCheck={false}
-          placeholder={saved ? "•••••••• saved — enter a new value to replace" : placeholder}
+          placeholder={saved ? "•••••••• (saved)" : placeholder}
           className="pl-9 font-mono"
         />
       </div>

@@ -1,5 +1,5 @@
 {
-  "id": "95cb08cd-ef1a-4546-9309-1285bc4f9041",
+  "id": "7149cf19-8204-4061-af3c-d8aa92d0cb96",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -164,6 +164,13 @@
           "notNull": true,
           "default": false
         },
+        "stopped_by_admin": {
+          "name": "stopped_by_admin",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
         "sso_secret_enc": {
           "name": "sso_secret_enc",
           "type": "text",
@@ -234,6 +241,22 @@
           "columns": [
             {
               "expression": "slug",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "status <> 'deleted'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "instances_user_live_uq": {
+          "name": "instances_user_live_uq",
+          "columns": [
+            {
+              "expression": "user_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -586,6 +609,12 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        },
+        "processed_at": {
+          "name": "processed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {},

@@ -115,6 +115,7 @@ export function instanceUrl(host: string): string {
 
 /** Body for `POST /services` (the compose is base64 encoded, the domain goes through `urls`). */
 export function buildCreateServiceBody(opts: {
+  instanceId: string;
   slug: string;
   host: string;
   ownerEmail: string;
@@ -126,7 +127,8 @@ export function buildCreateServiceBody(opts: {
 }) {
   return {
     name: serviceName(opts.slug),
-    description: `AutoSEO Cloud instance for ${opts.ownerEmail}`,
+    // The instance id lets a retry recognise (and adopt) its own half-created service.
+    description: `AutoSEO Cloud instance ${opts.instanceId} (${opts.ownerEmail})`,
     project_uuid: opts.projectUuid,
     server_uuid: opts.serverUuid,
     environment_name: opts.environmentName,

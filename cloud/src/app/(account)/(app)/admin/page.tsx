@@ -62,9 +62,9 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
   ];
 
   const setup = [
-    { ok: isSmtpConfigured(smtp), label: "Email (SMTP)", tab: "email" },
-    { ok: isStripeConnected(stripe), label: "Stripe", tab: "stripe" },
-    { ok: isCoolifyConfigured(coolify), label: "Coolify", tab: "coolify" },
+    { ok: isSmtpConfigured(smtp), label: "Email (SMTP)", impact: "sign-in links are only written to the server log" },
+    { ok: isStripeConnected(stripe), label: "Stripe", impact: "customers can't subscribe" },
+    { ok: isCoolifyConfigured(coolify), label: "Coolify", impact: "instances can't be created" },
   ];
   const missing = setup.filter((s) => !s.ok);
   const stats = [
@@ -86,8 +86,13 @@ export default async function AdminPage({ searchParams }: PageProps<"/admin">) {
           <CircleAlert />
           <AlertTitle>Setup incomplete</AlertTitle>
           <AlertDescription>
-            Not configured yet: {missing.map((m) => m.label).join(", ")}. Customers can&apos;t subscribe until Stripe is connected,
-            and instances can&apos;t be created until Coolify is configured.
+            <ul className="list-inside list-disc">
+              {missing.map((m) => (
+                <li key={m.label}>
+                  <span className="font-medium text-foreground">{m.label}</span> is not configured — {m.impact}.
+                </li>
+              ))}
+            </ul>
           </AlertDescription>
         </Alert>
       )}

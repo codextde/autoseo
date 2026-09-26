@@ -96,6 +96,8 @@ export const instances = pgTable(
     subscriptionStatus: text(),
     currentPeriodEnd: ts(),
     cancelAtPeriodEnd: boolean().notNull().default(false),
+    /** Stopped by an admin: billing events must not start it again until an admin starts it. */
+    stoppedByAdmin: boolean().notNull().default(false),
     /** AUTOSEO_SSO_SECRET of this instance, encrypted with the master key. */
     ssoSecretEnc: text(),
     /** Set once the service start was requested; the reconciler then waits for /api/health. */
@@ -112,6 +114,8 @@ export const instances = pgTable(
   (t) => [
     // Deleted instances release their address.
     uniqueIndex("instances_slug_live_uq").on(t.slug).where(sql`status <> 'deleted'`),
+    // One instance per account.
+    uniqueIndex("instances_user_live_uq").on(t.userId).where(sql`status <> 'deleted'`),
     index("instances_user_idx").on(t.userId),
     index("instances_subscription_idx").on(t.stripeSubscriptionId),
     index("instances_status_idx").on(t.status),
@@ -139,11 +143,12 @@ export const events = pgTable(
   (t) => [index("events_created_idx").on(t.createdAt), index("events_instance_idx").on(t.instanceId)],
 );
 
-/** Processed Stripe webhook event ids (idempotency). */
+/** Stripe webhook event ids (idempotency). A claim without `processedAt` is still in flight (or crashed). */
 export const stripeEvents = pgTable("stripe_events", {
   id: text().primaryKey(),
   type: text().notNull(),
   createdAt: createdAt(),
+  processedAt: ts(),
 });
 
 export type User = typeof users.$inferSelect;

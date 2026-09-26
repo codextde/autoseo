@@ -34,6 +34,12 @@ export async function requestLogin(rawEmail: string, next: string | null, mode: 
   if (!rateLimit(`login:email:${email}`, 5, 60 * 60 * 1000) || !rateLimit(`login:ip:${ip ?? "unknown"}`, 20, 60 * 60 * 1000)) {
     return { ok: false, error: "Too many sign-in emails requested. Please wait a while and try again." };
   }
+  // The client IP can be spoofed when the origin is reached without Cloudflare: cap total sends to protect
+  // the sender reputation of the SMTP server.
+  if (!rateLimit("login:global", 300, 60 * 60 * 1000)) {
+    console.warn("[auth] global sign-in email limit reached");
+    return { ok: false, error: "We're receiving a lot of sign-in requests right now. Please try again in a few minutes." };
+  }
 
   const [existing] = await db.select({ id: users.id }).from(users).where(eq(users.email, email)).limit(1);
   const token = randomToken(32);

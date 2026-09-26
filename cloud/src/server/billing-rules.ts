@@ -37,16 +37,22 @@ export function shouldApplySubscription(
 
 export type InstanceTransition = "provision" | "start" | "stop" | "none";
 
-/** What to do with an instance in `current` state when its subscription asks for `action`. */
-export function instanceTransition(current: InstanceStatus, action: SubscriptionAction): InstanceTransition {
+/**
+ * What to do with an instance in `current` state when its subscription asks for `action`.
+ * An instance an admin stopped stays stopped; an unpaid reservation stays pending (housekeeping releases it).
+ */
+export function instanceTransition(
+  current: InstanceStatus,
+  action: SubscriptionAction,
+  opts: { stoppedByAdmin?: boolean } = {},
+): InstanceTransition {
   if (current === "deleted" || action === "none") return "none";
   if (action === "run") {
     if (current === "pending_payment") return "provision";
-    if (current === "stopped") return "start";
+    if (current === "stopped") return opts.stoppedByAdmin ? "none" : "start";
     return "none"; // provisioning / running / failed (admin or customer retries a failed one)
   }
   // stop
   if (current === "running" || current === "provisioning" || current === "failed") return "stop";
-  if (current === "pending_payment") return "stop";
   return "none";
 }

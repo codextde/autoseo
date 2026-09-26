@@ -66,9 +66,9 @@ export function Hero() {
           <div className="mk-screen-glow pointer-events-none absolute -inset-x-10 -top-10 bottom-0" aria-hidden="true" />
           <BrowserFrame
             src="/screenshots/dashboard.png"
+            darkSrc="/screenshots/dashboard-dark.png"
             alt={hero.screenshotAlt}
             sizes="(min-width: 1024px) 1024px, calc(100vw - 2rem)"
-            priority
             reveal={false}
             className="relative"
           />

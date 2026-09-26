@@ -1,14 +1,15 @@
 import "server-only";
 import Stripe from "stripe";
 import { after } from "next/server";
-import { eq } from "drizzle-orm";
+import { and, eq, isNotNull } from "drizzle-orm";
 import { db } from "@/server/db/client";
 import { instances, users, type Instance, type User } from "@/server/db/schema";
 import { appUrl } from "@/server/http";
 import { logEvent } from "@/server/events";
 import { getSetting, isStripeConnected, STRIPE_PRICE_LOOKUP_KEY, updateSetting, type StripeSettings } from "@/server/settings";
 import { instanceTransition, isSubscriptionLive, shouldApplySubscription, subscriptionAction } from "@/server/billing-rules";
-import { getInstance, getInstanceBySubscription, getUserInstance } from "@/server/instances";
+import { checkSlugAvailability, getInstance, getInstanceBySubscription, getUserInstance } from "@/server/instances";
+import { instanceHost } from "@/server/compose";
 import { provisionInstance, stopInstance } from "@/server/provisioning";
 import { sendMail } from "@/server/email";
 import { paymentFailedEmail } from "@/server/email/templates";
@@ -16,6 +17,9 @@ import { paymentFailedEmail } from "@/server/email/templates";
 /** Marks every Stripe object this app creates, so setup can find (and only ever replace) its own. */
 const APP_TAG = "autoseo-cloud";
 const PRICE_CENTS = 5000;
+const PRODUCT_NAME = "AutoSEO Cloud";
+/** Stripe Tax code for "Software as a service (SaaS) — business use". */
+const SAAS_TAX_CODE = "txcd_10103000";
 
 export const WEBHOOK_EVENTS = [
   "checkout.session.completed",
@@ -30,6 +34,30 @@ export class BillingError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "BillingError";
+  }
+}
+
+/** The stored checkout was already paid (its webhook hadn't been processed yet) — it has been now. */
+export class CheckoutAlreadyPaidError extends BillingError {
+  constructor() {
+    super("Your payment went through — your instance is being set up.");
+    this.name = "CheckoutAlreadyPaidError";
+  }
+}
+
+/** Checkout sessions stay payable for 2 hours ("Resume checkout" creates a fresh one afterwards). */
+const CHECKOUT_TTL_SECONDS = 2 * 60 * 60;
+
+/**
+ * Runs slow follow-up work after the response when called from a request (webhook, redirect, action), or
+ * right away from the background reconciler, where Next.js' `after()` has no request scope.
+ */
+function runAfterResponse(task: () => Promise<unknown>) {
+  const guarded = () => task().catch((err) => console.error("[stripe] follow-up task failed", err));
+  try {
+    after(guarded);
+  } catch {
+    void guarded();
   }
 }
 
@@ -84,15 +112,17 @@ export async function connectStripe(): Promise<StripeSetupResult> {
       // Restricted keys may not read the account; not required.
     }
 
-    // 1. Product + price
+    // 1. Product + price — an existing price with the lookup key (and its product) is always reused.
     let price = (await stripe.prices.list({ lookup_keys: [STRIPE_PRICE_LOOKUP_KEY], active: true, limit: 1 })).data[0];
     if (!price) {
       const products = await stripe.products.list({ active: true, limit: 100 });
       const product =
         products.data.find((p) => p.metadata?.app === APP_TAG) ??
+        products.data.find((p) => p.name === PRODUCT_NAME) ??
         (await stripe.products.create({
-          name: "AutoSEO Cloud",
+          name: PRODUCT_NAME,
           description: "Your own private, fully managed AutoSEO instance",
+          tax_code: SAAS_TAX_CODE,
           metadata: { app: APP_TAG },
         }));
       price = await stripe.prices.create({
@@ -209,25 +239,38 @@ export async function createCheckoutSession(user: User, instance: Instance): Pro
   const { stripe, settings } = await stripeClient();
   if (!isStripeConnected(settings)) throw new BillingError("Billing is not set up yet. Please try again later or contact support.");
   try {
-    // Reuse a still-open session (e.g. "Resume checkout").
     if (instance.stripeCheckoutSessionId) {
       const existing = await stripe.checkout.sessions.retrieve(instance.stripeCheckoutSessionId).catch(() => null);
+      // Reuse a still-open session ("Resume checkout")…
       if (existing?.status === "open" && existing.url) return existing.url;
+      // …and never start a second checkout for one that was paid but not processed yet.
+      if (existing?.status === "complete") {
+        await processCheckoutSession(existing, "resume");
+        throw new CheckoutAlreadyPaidError();
+      }
     }
     const price = (await stripe.prices.list({ lookup_keys: [STRIPE_PRICE_LOOKUP_KEY], active: true, limit: 1 })).data[0];
     const priceId = price?.id ?? settings.priceId;
     const customer = await ensureCustomer(stripe, user);
-    const metadata = { userId: user.id, instanceId: instance.id, slug: instance.slug };
+    const metadata = {
+      userId: user.id,
+      instanceId: instance.id,
+      slug: instance.slug,
+      workspaceName: instance.workspaceName.slice(0, 450),
+    };
+    // One free trial per customer: none on resubscribes or for customers who had a subscription before.
+    const trial = settings.trialDays > 0 && !(await hadSubscriptionBefore(stripe, customer, user.id));
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       customer,
       client_reference_id: user.id,
       line_items: [{ price: priceId, quantity: 1 }],
       metadata,
+      expires_at: Math.floor(Date.now() / 1000) + CHECKOUT_TTL_SECONDS,
       subscription_data: {
         metadata,
         description: `AutoSEO Cloud — ${instance.host}`,
-        ...(settings.trialDays > 0 ? { trial_period_days: settings.trialDays } : {}),
+        ...(trial ? { trial_period_days: settings.trialDays } : {}),
       },
       success_url: appUrl("/dashboard?checkout=success&session_id={CHECKOUT_SESSION_ID}"),
       cancel_url: appUrl("/dashboard?checkout=canceled"),
@@ -250,15 +293,31 @@ export async function createCheckoutSession(user: User, instance: Instance): Pro
   }
 }
 
-/** Expires an open checkout session (customer canceled a pending instance). Best effort. */
-export async function expireCheckoutSession(sessionId: string): Promise<void> {
-  try {
-    const { stripe } = await stripeClient();
-    const session = await stripe.checkout.sessions.retrieve(sessionId);
-    if (session.status === "open") await stripe.checkout.sessions.expire(sessionId);
-  } catch {
-    // Unconfigured Stripe or already expired: nothing to do.
+async function hadSubscriptionBefore(stripe: Stripe, customerId: string, userId: string): Promise<boolean> {
+  const [previous] = await db
+    .select({ id: instances.id })
+    .from(instances)
+    .where(and(eq(instances.userId, userId), isNotNull(instances.stripeSubscriptionId)))
+    .limit(1);
+  if (previous) return true;
+  return (await stripe.subscriptions.list({ customer: customerId, status: "all", limit: 1 })).data.length > 0;
+}
+
+/**
+ * Must run before a reservation is canceled, deleted or re-addressed: a checkout that was already paid is
+ * processed (→ "paid", the caller must stop), an open one is expired so it can't be paid later (→ "clear").
+ * Throws when Stripe can't be reached, so callers never drop a reservation they couldn't verify.
+ */
+export async function settleCheckoutSession(instance: Instance): Promise<"paid" | "clear"> {
+  if (!instance.stripeCheckoutSessionId) return "clear";
+  const { stripe } = await stripeClient();
+  const session = await stripe.checkout.sessions.retrieve(instance.stripeCheckoutSessionId);
+  if (session.status === "complete") {
+    await processCheckoutSession(session, "settle");
+    return "paid";
   }
+  if (session.status === "open") await stripe.checkout.sessions.expire(session.id);
+  return "clear";
 }
 
 export async function createPortalSession(user: User): Promise<string> {
@@ -276,15 +335,18 @@ export async function createPortalSession(user: User): Promise<string> {
   }
 }
 
-/** Admin delete: stop billing for an instance that no longer exists. Best effort. */
-export async function cancelSubscriptionNow(instance: Instance, actor: string): Promise<void> {
-  if (!instance.stripeSubscriptionId || !isSubscriptionLive(instance.subscriptionStatus)) return;
+/** Admin delete: stop billing for an instance that is about to disappear. */
+export async function cancelSubscriptionNow(instance: Instance, actor: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!instance.stripeSubscriptionId || !isSubscriptionLive(instance.subscriptionStatus)) return { ok: true };
   try {
     const { stripe } = await stripeClient();
     await stripe.subscriptions.cancel(instance.stripeSubscriptionId);
     await logEvent("billing.subscription_canceled", { instanceId: instance.id, userId: instance.userId, data: { actor, subscriptionId: instance.stripeSubscriptionId } });
+    return { ok: true };
   } catch (err) {
-    await logEvent("billing.subscription_cancel_failed", { instanceId: instance.id, data: { actor, error: stripeMessage(err) } });
+    const error = stripeMessage(err);
+    await logEvent("billing.subscription_cancel_failed", { instanceId: instance.id, data: { actor, error } });
+    return { ok: false, error };
   }
 }
 
@@ -300,16 +362,34 @@ function periodEnd(sub: Stripe.Subscription): Date | null {
   return ends.length ? new Date(Math.max(...ends) * 1000) : null;
 }
 
+/**
+ * A second live subscription for an instance that already has one (e.g. two checkouts completed in parallel):
+ * cancel it so the customer isn't billed twice, and leave the refund to an admin.
+ */
+async function cancelDuplicateSubscription(stripe: Stripe, instance: Instance, sub: Stripe.Subscription, source: string) {
+  if (!isSubscriptionLive(sub.status) || sub.metadata?.instanceId !== instance.id || !instance.stripeSubscriptionId) return;
+  const current = await stripe.subscriptions.retrieve(instance.stripeSubscriptionId);
+  if (!isSubscriptionLive(current.status)) return;
+  await stripe.subscriptions.cancel(sub.id);
+  console.error(`[stripe] canceled duplicate subscription ${sub.id} for instance ${instance.id} — refund it in Stripe`);
+  await logEvent("billing.duplicate_subscription_canceled", {
+    instanceId: instance.id,
+    userId: instance.userId,
+    data: { subscriptionId: sub.id, kept: instance.stripeSubscriptionId, source, action: "refund the first payment in Stripe" },
+  });
+}
+
 /** Stores subscription state on the instance and starts/stops it accordingly (work runs after the response). */
-async function applySubscription(instance: Instance, sub: Stripe.Subscription, source: string): Promise<void> {
+async function applySubscription(stripe: Stripe, instance: Instance, sub: Stripe.Subscription, source: string): Promise<void> {
   if (!shouldApplySubscription(instance, sub)) {
     await logEvent("stripe.subscription_ignored", {
       instanceId: instance.id,
       data: { subscriptionId: sub.id, status: sub.status, current: instance.stripeSubscriptionId, source },
     });
+    await cancelDuplicateSubscription(stripe, instance, sub, source);
     return;
   }
-  const transition = instanceTransition(instance.status, subscriptionAction(sub.status));
+  const transition = instanceTransition(instance.status, subscriptionAction(sub.status), { stoppedByAdmin: instance.stoppedByAdmin });
   const statusChanged = instance.subscriptionStatus !== sub.status || instance.stripeSubscriptionId !== sub.id;
   await db
     .update(instances)
@@ -331,9 +411,9 @@ async function applySubscription(instance: Instance, sub: Stripe.Subscription, s
     });
   }
   if (transition === "provision" || transition === "start") {
-    after(() => provisionInstance(instance.id, `stripe:${source}`));
+    runAfterResponse(() => provisionInstance(instance.id, `stripe:${source}`));
   } else if (transition === "stop") {
-    after(async () => {
+    runAfterResponse(async () => {
       const fresh = await getInstance(instance.id);
       if (fresh) await stopInstance(fresh, `stripe:${source}`, `subscription ${sub.status}`);
     });
@@ -350,7 +430,40 @@ async function syncSubscriptionById(stripe: Stripe, subscriptionId: string, sour
     await logEvent("stripe.subscription_unmatched", { data: { subscriptionId, source } });
     return;
   }
-  await applySubscription(instance, sub, source);
+  await applySubscription(stripe, instance, sub, source);
+}
+
+/**
+ * A paid checkout whose reservation is gone (released or canceled while the customer was still paying):
+ * recreate it from the session metadata when the address is still free, so the payment isn't lost.
+ */
+async function recreateReservation(session: Stripe.Checkout.Session): Promise<Instance | null> {
+  const { instanceId, userId, slug, workspaceName } = session.metadata ?? {};
+  if (!instanceId || !userId || !slug || session.client_reference_id !== userId) return null;
+  const [owner] = await db.select({ id: users.id }).from(users).where(eq(users.id, userId)).limit(1);
+  if (!owner || (await getUserInstance(userId))) return null;
+  const availability = await checkSlugAvailability(slug);
+  if (!availability.available) return null;
+  const coolify = await getSetting("coolify");
+  try {
+    const [row] = await db
+      .insert(instances)
+      .values({
+        id: instanceId,
+        userId,
+        slug: availability.slug,
+        host: instanceHost(availability.slug, coolify.baseDomain),
+        workspaceName: workspaceName || "My Workspace",
+        stripeCheckoutSessionId: session.id,
+      })
+      .onConflictDoNothing()
+      .returning();
+    if (row) await logEvent("instance.reservation_restored", { instanceId, userId, data: { sessionId: session.id, slug } });
+    const restored = row ?? (await getInstance(instanceId)); // a concurrent webhook/redirect may have won
+    return restored && restored.status !== "deleted" ? restored : null;
+  } catch {
+    return null; // lost a race for the address
+  }
 }
 
 /**
@@ -360,9 +473,15 @@ async function syncSubscriptionById(stripe: Stripe, subscriptionId: string, sour
 export async function processCheckoutSession(session: Stripe.Checkout.Session, source: string): Promise<Instance | null> {
   if (session.mode !== "subscription" || session.status !== "complete") return null;
   const instanceId = session.metadata?.instanceId;
-  const instance = instanceId ? await getInstance(instanceId) : null;
+  const existing = instanceId ? await getInstance(instanceId) : null;
+  const instance = existing && existing.status !== "deleted" ? existing : await recreateReservation(session);
   if (!instance) {
-    await logEvent("stripe.checkout_unmatched", { data: { sessionId: session.id, source } });
+    // Paid, but there is nothing to provision: needs an admin (refund or manual setup).
+    console.error(`[stripe] paid checkout ${session.id} has no instance — resolve it manually`);
+    await logEvent("stripe.checkout_unmatched", {
+      userId: session.client_reference_id,
+      data: { sessionId: session.id, subscription: idOf(session.subscription), source, action: "refund or set up manually" },
+    });
     return null;
   }
   if (instance.userId && session.client_reference_id && session.client_reference_id !== instance.userId) {
@@ -443,7 +562,7 @@ export async function handleStripeEvent(event: Stripe.Event): Promise<void> {
       }
       // Events can arrive out of order: always act on the current state from the API.
       const latest = event.type === "customer.subscription.deleted" ? sub : await stripe.subscriptions.retrieve(sub.id);
-      await applySubscription(instance, latest, event.type);
+      await applySubscription(stripe, instance, latest, event.type);
       break;
     }
     case "invoice.payment_failed":

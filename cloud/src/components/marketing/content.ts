@@ -143,7 +143,7 @@ export const overview = {
   ],
 } as const;
 
-export type Screenshot = { src: string; alt: string; url: string };
+export type Screenshot = { src: string; alt: string; url: string; darkSrc?: string };
 
 export type FeatureRow = {
   id: string;
@@ -169,6 +169,7 @@ export const featureRows: FeatureRow[] = [
     ],
     image: {
       src: "/screenshots/ai-tracker.png",
+      darkSrc: "/screenshots/ai-tracker-dark.png",
       alt: "AutoSEO AI visibility tracker with visibility trend chart and tracked prompts per AI engine",
       url: "ai/tracker",
     },
@@ -186,6 +187,7 @@ export const featureRows: FeatureRow[] = [
     ],
     image: {
       src: "/screenshots/competitors.png",
+      darkSrc: "/screenshots/competitors-dark.png",
       alt: "AutoSEO competitor ranking comparing brand visibility, mention rate and sentiment in AI answers",
       url: "ai/competitors",
     },
@@ -281,6 +283,16 @@ export const seoSuite = {
 export const actions = {
   eyebrow: "From insight to action",
   title: "Turn what AI says into work that gets done",
+  image: {
+    src: "/screenshots/tasks.png",
+    alt: "AutoSEO tasks with prioritized, evidence-backed actions for AI visibility and SEO",
+    url: "tasks",
+  } satisfies Screenshot,
+  secondary: {
+    src: "/screenshots/bot-traffic.png",
+    alt: "AutoSEO bot traffic analytics with daily visits from AI crawlers such as GPTBot and ClaudeBot",
+    url: "analytics/bots",
+  } satisfies Screenshot,
   items: [
     {
       icon: "list",

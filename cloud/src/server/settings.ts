@@ -75,7 +75,8 @@ const defaults: SettingsMap = {
     connectedAt: null,
     lastError: "",
     trialDays: 0,
-    automaticTax: false,
+    // Stripe Tax is active on the live account (DE registration).
+    automaticTax: true,
     allowPromotionCodes: true,
   },
   coolify: {

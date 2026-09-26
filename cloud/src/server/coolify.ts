@@ -19,7 +19,7 @@ export type CoolifyConnection = { baseUrl: string; apiToken: string };
 export type CoolifyServer = { uuid: string; name: string; ip?: string; description?: string | null };
 export type CoolifyProject = { uuid: string; name: string; description?: string | null };
 export type CoolifyEnvironment = { uuid?: string; name: string };
-export type CoolifyService = { uuid: string; name: string; status?: string | null };
+export type CoolifyService = { uuid: string; name: string; description?: string | null; status?: string | null };
 export type CoolifyServiceApplication = { uuid: string; name: string; fqdn?: string | null; status?: string | null };
 
 export function connectionFromSettings(s: Pick<CoolifySettings, "baseUrl" | "apiToken">): CoolifyConnection {

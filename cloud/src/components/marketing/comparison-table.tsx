@@ -4,9 +4,10 @@ import { LogoMark } from "./primitives";
 
 export function ComparisonTable() {
   return (
-    <div className="overflow-hidden rounded-2xl border bg-card">
-      <div className="overflow-x-auto" tabIndex={0} role="region" aria-label="Comparison table">
-        <table className="w-full min-w-[36rem] border-collapse text-left text-sm">
+    <>
+      <ComparisonList />
+      <div className="hidden overflow-hidden rounded-2xl border bg-card sm:block">
+        <table className="w-full border-collapse text-left text-sm">
           <caption className="sr-only">{comparison.title}</caption>
           <thead>
             <tr className="border-b">
@@ -47,6 +48,39 @@ export function ComparisonTable() {
           </tbody>
         </table>
       </div>
-    </div>
+    </>
+  );
+}
+
+/** Phone layout: one card per row instead of a table that would need sideways scrolling. */
+function ComparisonList() {
+  return (
+    <ul className="divide-y overflow-hidden rounded-2xl border bg-card sm:hidden">
+      {comparison.rows.map((row) => (
+        <li key={row.label} className="p-4">
+          <p className="font-medium">{row.label}</p>
+          <dl className="mt-2.5 space-y-2 text-sm">
+            <div className="rounded-lg bg-brand-soft/60 px-3 py-2 dark:bg-brand-soft/30">
+              <dt className="sr-only">{comparison.columns[0]}</dt>
+              <dd className="flex gap-2.5">
+                <Check className="mt-0.5 size-4 shrink-0 text-green-700 dark:text-green-400" strokeWidth={2.5} aria-hidden="true" />
+                <span>
+                  <span className="font-medium">AutoSEO:</span> {row.ours}
+                </span>
+              </dd>
+            </div>
+            <div className="px-3 text-muted-foreground">
+              <dt className="sr-only">{comparison.columns[1]}</dt>
+              <dd className="flex gap-2.5">
+                <Minus className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                <span>
+                  <span className="font-medium">Closed SaaS:</span> {row.theirs}
+                </span>
+              </dd>
+            </div>
+          </dl>
+        </li>
+      ))}
+    </ul>
   );
 }

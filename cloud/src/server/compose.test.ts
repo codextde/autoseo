@@ -65,6 +65,7 @@ describe("buildCompose", () => {
 
 describe("buildCreateServiceBody", () => {
   const body = buildCreateServiceBody({
+    instanceId: "ins_abc",
     slug: "acme",
     host: instanceHost("acme", "autoseo.codext.de"),
     ownerEmail: "owner@acme.com",
@@ -79,6 +80,7 @@ describe("buildCreateServiceBody", () => {
     expect(serviceName("acme")).toBe("autoseo-acme");
     expect(body.urls).toEqual([{ name: "app", url: "https://acme.autoseo.codext.de" }]);
     expect(body).toMatchObject({ project_uuid: "prj", server_uuid: "srv", environment_name: "production", instant_deploy: false });
+    expect(body.description).toContain("ins_abc");
   });
 
   it("sends the compose base64 encoded", () => {

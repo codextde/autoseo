@@ -34,8 +34,16 @@ describe("instanceTransition", () => {
     expect(instanceTransition("running", "stop")).toBe("stop");
     expect(instanceTransition("provisioning", "stop")).toBe("stop");
     expect(instanceTransition("failed", "stop")).toBe("stop");
-    expect(instanceTransition("pending_payment", "stop")).toBe("stop");
     expect(instanceTransition("stopped", "stop")).toBe("none");
+  });
+
+  it("keeps an unpaid reservation pending so housekeeping can release the address", () => {
+    expect(instanceTransition("pending_payment", "stop")).toBe("none");
+  });
+
+  it("doesn't restart an instance an admin stopped", () => {
+    expect(instanceTransition("stopped", "run", { stoppedByAdmin: true })).toBe("none");
+    expect(instanceTransition("stopped", "run", { stoppedByAdmin: false })).toBe("start");
   });
 
   it("never touches deleted instances and ignores 'none'", () => {

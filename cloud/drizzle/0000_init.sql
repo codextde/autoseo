@@ -20,6 +20,7 @@ CREATE TABLE "instances" (
 	"subscription_status" text,
 	"current_period_end" timestamp with time zone,
 	"cancel_at_period_end" boolean DEFAULT false NOT NULL,
+	"stopped_by_admin" boolean DEFAULT false NOT NULL,
 	"sso_secret_enc" text,
 	"start_requested_at" timestamp with time zone,
 	"provision_attempts" integer DEFAULT 0 NOT NULL,
@@ -66,7 +67,8 @@ CREATE TABLE "settings" (
 CREATE TABLE "stripe_events" (
 	"id" text PRIMARY KEY NOT NULL,
 	"type" text NOT NULL,
-	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"processed_at" timestamp with time zone
 );
 --> statement-breakpoint
 CREATE TABLE "users" (
@@ -84,6 +86,7 @@ ALTER TABLE "sessions" ADD CONSTRAINT "sessions_user_id_users_id_fk" FOREIGN KEY
 CREATE INDEX "events_created_idx" ON "events" USING btree ("created_at");--> statement-breakpoint
 CREATE INDEX "events_instance_idx" ON "events" USING btree ("instance_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "instances_slug_live_uq" ON "instances" USING btree ("slug") WHERE status <> 'deleted';--> statement-breakpoint
+CREATE UNIQUE INDEX "instances_user_live_uq" ON "instances" USING btree ("user_id") WHERE status <> 'deleted';--> statement-breakpoint
 CREATE INDEX "instances_user_idx" ON "instances" USING btree ("user_id");--> statement-breakpoint
 CREATE INDEX "instances_subscription_idx" ON "instances" USING btree ("stripe_subscription_id");--> statement-breakpoint
 CREATE INDEX "instances_status_idx" ON "instances" USING btree ("status");--> statement-breakpoint

@@ -10,7 +10,13 @@ import { assertUser, AuthError } from "@/server/auth/guards";
 import { checkSlugAvailability, getUserInstance } from "@/server/instances";
 import { instanceHost } from "@/server/compose";
 import { getSetting } from "@/server/settings";
-import { BillingError, createCheckoutSession, createPortalSession, expireCheckoutSession } from "@/server/stripe";
+import {
+  BillingError,
+  CheckoutAlreadyPaidError,
+  createCheckoutSession,
+  createPortalSession,
+  settleCheckoutSession,
+} from "@/server/stripe";
 import { isSubscriptionLive, subscriptionAction } from "@/server/billing-rules";
 import { restartInstance, retryProvisioning } from "@/server/provisioning";
 import { instanceSsoRedirect } from "@/server/instance-access";
@@ -20,6 +26,10 @@ import { logEvent } from "@/server/events";
 export type InstanceActionState = { error?: string; message?: string };
 
 function failure(err: unknown): InstanceActionState {
+  if (err instanceof CheckoutAlreadyPaidError) {
+    refresh();
+    return { message: err.message };
+  }
   if (err instanceof AuthError || err instanceof BillingError) return { error: err.message };
   console.error("[instance action]", err);
   return { error: "Something went wrong. Please try again or contact support." };
@@ -27,7 +37,12 @@ function failure(err: unknown): InstanceActionState {
 
 const startSchema = z.object({
   slug: z.string().trim().toLowerCase().min(1, "Choose an address."),
-  workspaceName: z.string().trim().min(1, "Enter a workspace name.").max(80, "Use at most 80 characters."),
+  workspaceName: z
+    .string()
+    .trim()
+    .min(1, "Enter a workspace name.")
+    .max(80, "Use at most 80 characters.")
+    .refine((v) => !/[\x00-\x1f\x7f]/.test(v), "The workspace name contains invalid characters."),
 });
 
 /** "Continue to payment": reserves the address (pending_payment) and sends the customer to Stripe Checkout. */
@@ -48,9 +63,17 @@ export async function startCheckoutAction(_prev: InstanceActionState, formData: 
     const host = instanceHost(availability.slug, coolify.baseDomain);
     let created = false;
     if (instance) {
+      const addressChanged = instance.host !== host;
+      // An open checkout for the old address would carry stale details: replace it (unless it was paid already).
+      if (addressChanged && (await settleCheckoutSession(instance)) === "paid") throw new CheckoutAlreadyPaidError();
       [instance] = await db
         .update(instances)
-        .set({ slug: availability.slug, host, workspaceName: parsed.data.workspaceName })
+        .set({
+          slug: availability.slug,
+          host,
+          workspaceName: parsed.data.workspaceName,
+          ...(addressChanged ? { stripeCheckoutSessionId: null } : {}),
+        })
         .where(eq(instances.id, instance.id))
         .returning();
     } else {
@@ -86,8 +109,9 @@ export async function resumeCheckoutAction(): Promise<InstanceActionState> {
     const { user } = await assertUser();
     const instance = await getUserInstance(user.id);
     if (!instance || !["pending_payment", "stopped"].includes(instance.status)) return { error: "There is nothing to pay for." };
-    if (instance.status === "stopped" && isSubscriptionLive(instance.subscriptionStatus) && subscriptionAction(instance.subscriptionStatus) !== "stop") {
-      return { error: "Your subscription is still active — use “Manage billing” instead." };
+    // Resubscribing only makes sense once the old subscription is over; an unpaid/paused one is fixed in the portal.
+    if (instance.status === "stopped" && isSubscriptionLive(instance.subscriptionStatus)) {
+      return { error: "Your subscription still exists — update your payment method under “Manage billing” instead." };
     }
     checkoutUrl = await createCheckoutSession(user, instance);
   } catch (err) {
@@ -102,7 +126,7 @@ export async function cancelPendingAction(): Promise<InstanceActionState> {
     const { user } = await assertUser();
     const instance = await getUserInstance(user.id);
     if (!instance || instance.status !== "pending_payment") return { error: "There is no pending order." };
-    if (instance.stripeCheckoutSessionId) await expireCheckoutSession(instance.stripeCheckoutSessionId);
+    if ((await settleCheckoutSession(instance)) === "paid") throw new CheckoutAlreadyPaidError();
     await db.delete(instances).where(and(eq(instances.id, instance.id), eq(instances.status, "pending_payment")));
     await logEvent("instance.reservation_canceled", { userId: user.id, instanceId: instance.id, data: { slug: instance.slug } });
   } catch (err) {

@@ -5,18 +5,23 @@ import { site } from "@/lib/site";
 
 type FrameProps = {
   src: string;
+  /** Optional dark-UI screenshot shown in dark mode (lazy, so the hidden variant is never downloaded). */
+  darkSrc?: string;
   alt: string;
   /** Path shown in the fake address bar, relative to the demo instance. */
   url?: string;
   sizes?: string;
-  /** Hero image only: fetch eagerly with high priority (LCP). */
-  priority?: boolean;
+  /**
+   * Hero image only: load eagerly. Not `fetchPriority="high"` — the LCP element is the hero text on every viewport,
+   * and a high-priority preload would compete with CSS and fonts on slow connections.
+   */
+  eager?: boolean;
   reveal?: boolean;
   className?: string;
 };
 
 /** Product screenshot (1600×1000) in a minimal browser window. */
-export function BrowserFrame({ src, alt, url = "", sizes, priority, reveal = true, className }: FrameProps) {
+export function BrowserFrame({ src, darkSrc, alt, url = "", sizes, eager, reveal = true, className }: FrameProps) {
   return (
     <figure
       className={cn(
@@ -31,7 +36,7 @@ export function BrowserFrame({ src, alt, url = "", sizes, priority, reveal = tru
           <span className="size-2.5 rounded-full bg-[#febc2e]" />
           <span className="size-2.5 rounded-full bg-[#28c840]" />
         </div>
-        <div className="mx-auto flex h-6 max-w-[60%] min-w-0 items-center gap-1.5 truncate rounded-md bg-background/80 px-3 text-[0.7rem] text-muted-foreground sm:text-xs">
+        <div className="mx-auto flex h-6 max-w-sm min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md bg-background/80 px-3 text-[0.7rem] text-muted-foreground [contain:inline-size] sm:text-xs">
           <Lock className="size-3 shrink-0" />
           <span className="truncate">
             acme.{site.host}
@@ -40,21 +45,25 @@ export function BrowserFrame({ src, alt, url = "", sizes, priority, reveal = tru
         </div>
         <div className="w-10" />
       </div>
-      <Image
-        src={src}
-        alt={alt}
-        width={1600}
-        height={1000}
-        sizes={sizes ?? "(min-width: 1152px) 680px, (min-width: 1024px) 58vw, 100vw"}
-        fetchPriority={priority ? "high" : undefined}
-        loading={priority ? "eager" : undefined}
-        className="block h-auto w-full"
-      />
+      {[darkSrc ? { src, className: "dark:hidden" } : { src }, ...(darkSrc ? [{ src: darkSrc, className: "hidden dark:block" }] : [])].map(
+        (img) => (
+          <Image
+            key={img.src}
+            src={img.src}
+            alt={alt}
+            width={1600}
+            height={1000}
+            sizes={sizes ?? "(min-width: 1152px) 680px, (min-width: 1024px) 58vw, 100vw"}
+            loading={eager ? "eager" : undefined}
+            className={cn("block h-auto w-full", img.className)}
+          />
+        ),
+      )}
     </figure>
   );
 }
 
-/** Phone screenshot (390×844) in a device outline. */
+/** Phone screenshot (780×1688, i.e. 390×844 @2x) in a device outline. */
 export function PhoneFrame({ src, alt, className }: { src: string; alt: string; className?: string }) {
   return (
     <figure
@@ -66,8 +75,8 @@ export function PhoneFrame({ src, alt, className }: { src: string; alt: string; 
       <Image
         src={src}
         alt={alt}
-        width={390}
-        height={844}
+        width={780}
+        height={1688}
         sizes="200px"
         className="block h-auto w-full rounded-[1.6rem]"
       />

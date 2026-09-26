@@ -146,7 +146,7 @@ function RunningView({ view }: { view: InstanceView }) {
   const healthy = view.healthy !== false;
   return (
     <div className="space-y-6">
-      <Card className="overflow-hidden">
+      <Card className="overflow-hidden pt-0">
         <div className="relative border-b bg-gradient-to-br from-brand-soft/70 via-card to-card p-6 sm:p-8 dark:from-brand/10">
           <div className="flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
             <div className="min-w-0">
@@ -175,7 +175,11 @@ function RunningView({ view }: { view: InstanceView }) {
               <span className={`rounded-full px-2 py-0.5 text-xs ${toneClass[sub.tone]}`}>{sub.label}</span>
             </Detail>
             <Detail label={view.cancelAtPeriodEnd ? "Access until" : "Renews on"}>{formatDate(view.currentPeriodEnd)}</Detail>
-            <Detail label="Last health check">{view.lastHealthAt ? new Date(view.lastHealthAt).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" }) : "—"}</Detail>
+            <Detail label="Last health check">
+              {view.lastHealthAt
+                ? new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(view.lastHealthAt))
+                : "—"}
+            </Detail>
             <Detail label="Created">{formatDate(view.createdAt)}</Detail>
           </dl>
         </CardContent>
@@ -229,9 +233,8 @@ function RunningView({ view }: { view: InstanceView }) {
 }
 
 function StoppedView({ view }: { view: InstanceView }) {
-  const action = subscriptionAction(view.subscriptionStatus);
-  const paymentIssue = view.subscriptionStatus === "unpaid" || view.subscriptionStatus === "past_due";
-  const ended = !isSubscriptionLive(view.subscriptionStatus) || action === "stop";
+  const paymentIssue = ["unpaid", "past_due", "paused"].includes(view.subscriptionStatus ?? "");
+  const ended = !isSubscriptionLive(view.subscriptionStatus);
   return (
     <Card>
       <CardHeader>

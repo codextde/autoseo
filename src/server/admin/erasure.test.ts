@@ -75,7 +75,8 @@ describe("eraseUser (integration, dev DB)", () => {
     const [ws] = await db.insert(workspaces).values({ name: `Erasure test ${suffix}`, slug: `erasure-test-${suffix}` }).returning();
     wsId = ws!.id;
     const [u] = await db.insert(users).values({ email, name: "Erase Me" }).returning();
-    const [o] = await db.insert(users).values({ email: otherEmail, name: "Colleague" }).returning();
+    // The colleague is the instance admin, so erasing the test user never leaves the instance without one.
+    const [o] = await db.insert(users).values({ email: otherEmail, name: "Colleague", isInstanceAdmin: true }).returning();
     userId = u!.id;
     otherId = o!.id;
     await db.insert(workspaceMembers).values([

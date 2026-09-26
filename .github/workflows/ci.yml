@@ -14,6 +14,23 @@ jobs:
   app:
     name: app
     runs-on: ubuntu-24.04
+    # Integration tests run against a real database (same defaults as the dev setup in CONTRIBUTING.md).
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: autoseo
+          POSTGRES_PASSWORD: autoseo
+          POSTGRES_DB: autoseo
+        ports:
+          - 54329:5432
+        options: >-
+          --health-cmd "pg_isready -U autoseo -d autoseo"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgres://autoseo:autoseo@localhost:54329/autoseo
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -36,6 +53,9 @@ jobs:
 
       - name: Lint
         run: pnpm lint
+
+      - name: Create database schema
+        run: pnpm db:push
 
       - name: Test
         run: pnpm test

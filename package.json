@@ -51,7 +51,7 @@
     "react-dom": "19.3.0",
     "react-markdown": "^10.1.0",
     "react-resizable-panels": "^4.13.3",
-    "recharts": "^3.8.0",
+    "recharts": "^3.10.1",
     "remark-gfm": "^4.0.1",
     "server-only": "^0.0.1",
     "shadcn": "^4.21.0",

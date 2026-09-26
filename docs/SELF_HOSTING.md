@@ -186,12 +186,19 @@ docker compose cp ./autoseo-2026-01-01.dump postgres:/tmp/autoseo.dump
 docker compose exec postgres pg_restore -U autoseo -d autoseo --clean --if-exists /tmp/autoseo.dump
 ```
 
-For the `autoseo-data` volume, back it up like any Docker volume, e.g.:
+For the `autoseo-data` volume, stream a tarball out of the running app container (works no matter what
+Compose named the volume):
 
 ```bash
-docker run --rm -v autoseo-data:/data -v "$PWD":/backup alpine \
-  tar czf /backup/autoseo-data-$(date +%F).tar.gz -C /data .
+# Backup
+docker compose exec -T app tar czf - -C /data . > autoseo-data-$(date +%F).tar.gz
+
+# Restore (then restart the app: docker compose restart app)
+docker compose exec -T app tar xzf - -C /data < autoseo-data-2026-01-01.tar.gz
 ```
+
+Compose prefixes volume names with the project name (the install directory, e.g. `autoseo_autoseo-data` for
+`/opt/autoseo`); run `docker volume ls` if you want to back up the raw volumes instead.
 
 Automate both on a schedule (cron, systemd timer, or your infra's backup tooling) and store copies off the
 server.

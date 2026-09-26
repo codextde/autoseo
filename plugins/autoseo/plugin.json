@@ -1,0 +1,41 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "autoseo",
+  "version": "1.0.0",
+  "description": "AI visibility (GEO) and SEO data for your agent: how ChatGPT, Perplexity and Google AI answer about your brand, plus keyword research, SERPs, backlinks, rank tracking, local SEO and site audits \u2014 from your self-hosted AutoSEO.",
+  "author": {
+    "name": "AutoSEO"
+  },
+  "keywords": [
+    "seo",
+    "geo",
+    "ai-visibility",
+    "keyword-research",
+    "serp",
+    "site-audit",
+    "backlinks",
+    "search-console",
+    "rank-tracking",
+    "local-seo"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "AutoSEO",
+        "shortDescription": "AI visibility & SEO data from your self-hosted AutoSEO.",
+        "longDescription": "AI visibility (GEO) and SEO data for your agent: how ChatGPT, Perplexity and Google AI answer about your brand, plus keyword research, SERPs, backlinks, rank tracking, local SEO and site audits \u2014 from your self-hosted AutoSEO.",
+        "developerName": "AutoSEO",
+        "category": "Productivity",
+        "capabilities": [
+          "Read",
+          "Write"
+        ],
+        "defaultPrompt": [
+          "How visible is my brand in ChatGPT and Perplexity this month, and what should I do next?",
+          "Audit my site and give me a one-page report with a single next action.",
+          "Research keywords for my site and shortlist the best opportunities."
+        ]
+      }
+    }
+  }
+}

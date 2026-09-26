@@ -1,0 +1,16 @@
+{
+  "name": "autoseo",
+  "owner": {
+    "name": "AutoSEO"
+  },
+  "metadata": {
+    "description": "AutoSEO's Cursor plugin marketplace."
+  },
+  "plugins": [
+    {
+      "name": "autoseo",
+      "source": "plugins/autoseo",
+      "description": "AI visibility (GEO) and SEO data for your agent: how ChatGPT, Perplexity and Google AI answer about your brand, plus keyword research, SERPs, backlinks, rank tracking, local SEO and site audits \u2014 from your self-hosted AutoSEO."
+    }
+  ]
+}

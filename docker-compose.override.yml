@@ -1,0 +1,6 @@
+# Local convenience: `docker compose up` merges this file automatically and publishes the app on
+# http://localhost:3000. Coolify deploys docker-compose.yml only and routes traffic via its proxy.
+services:
+  app:
+    ports:
+      - "${APP_PORT:-3000}:3000"

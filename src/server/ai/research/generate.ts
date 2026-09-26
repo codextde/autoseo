@@ -1,0 +1,257 @@
+import "server-only";
+import { and, eq } from "drizzle-orm";
+import { z } from "zod";
+import { db } from "@/server/db/client";
+import { competitors, projects, promptResearchItems, promptResearchLists } from "@/server/db/schema";
+import { runLlm } from "@/server/ai/llm";
+import { enqueueJob } from "@/server/jobs/queue";
+import type { JobContext } from "@/server/jobs/types";
+import { getCountry } from "@/lib/countries";
+import { brandBriefing, getBrandProfile, hasBrandContext, languageName } from "@/server/ai/knowledge/profile";
+import { getKnowledge, notifyUser } from "@/server/ai/knowledge/store";
+import { countItems, ensureDefaultList, lengthOf, MAX_ITEMS_PER_LIST } from "./lists";
+import { enrichListVolumes } from "./enrich";
+import type { InterestData, PersonasData, PromptSetConfig } from "@/features/ai-research/types";
+
+export const GENERATE_JOB = "ai_research.generate_prompts";
+
+export const promptSetConfigSchema = z.object({
+  topics: z.array(z.string().trim().min(1).max(120)).max(30).default([]),
+  personas: z.array(z.string().trim().min(1).max(160)).max(20).default([]),
+  funnelStages: z.array(z.enum(["tofu", "mofu", "bofu"])).min(1).default(["tofu", "mofu", "bofu"]),
+  brandedShare: z.number().int().min(0).max(100).default(20),
+  competitorComparisons: z.boolean().default(true),
+  competitors: z.array(z.string().trim().min(1).max(120)).max(20).default([]),
+  lengths: z.array(z.enum(["short", "medium", "long"])).min(1).default(["short", "medium", "long"]),
+  count: z.number().int().min(5).max(200).default(40),
+  language: z.string().min(2).max(8),
+  country: z.string().min(2).max(3),
+  instructions: z.string().max(1000).optional(),
+});
+
+const batchSchema = z.object({
+  prompts: z.array(
+    z.object({
+      text: z.string(),
+      topic: z.string(),
+      funnelStage: z.enum(["tofu", "mofu", "bofu"]),
+      persona: z.string().nullable(),
+      intent: z.enum(["informational", "comparison", "recommendation", "transactional", "navigational", "problem"]),
+      branded: z.boolean(),
+      competitor: z.string().nullable(),
+      keyword: z.string(),
+      relativeVolume: z.number(),
+      rationale: z.string(),
+    }),
+  ),
+});
+
+const LENGTH_HINT = { short: "short (≤ 8 words)", medium: "medium (9–18 words)", long: "long, detailed with context (19–40 words)" };
+
+/** Default Prompt Set Helper config derived from brand knowledge. */
+export async function defaultPromptSetConfig(projectId: string): Promise<PromptSetConfig> {
+  const [project] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
+  if (!project) throw new Error("Project not found.");
+  const profile = await getBrandProfile(projectId);
+  const interest = await getKnowledge<InterestData>(projectId, "interest");
+  const personas = await getKnowledge<PersonasData>(projectId, "personas");
+  const comps = await db.select({ name: competitors.name }).from(competitors).where(and(eq(competitors.projectId, projectId), eq(competitors.tracked, true)));
+  const topics = interest.data?.clusters.length
+    ? interest.data.clusters.filter((c) => !c.branded && c.name !== "Other").slice(0, 8).map((c) => c.name)
+    : profile.categories.slice(0, 8);
+  return {
+    topics,
+    personas: (personas.data?.personas ?? []).slice(0, 8).map((p) => p.name),
+    funnelStages: ["tofu", "mofu", "bofu"],
+    brandedShare: 20,
+    competitorComparisons: comps.length > 0,
+    competitors: comps.slice(0, 10).map((c) => c.name),
+    lengths: ["short", "medium", "long"],
+    count: 40,
+    language: project.language,
+    country: project.country,
+  };
+}
+
+/** Marks the list as generating and enqueues the Prompt Set Helper job. */
+export async function startPromptGeneration(opts: {
+  projectId: string;
+  listId: string;
+  config: PromptSetConfig;
+  userId: string | null;
+  auto?: boolean;
+}): Promise<{ jobId: string | null }> {
+  const [list] = await db
+    .select()
+    .from(promptResearchLists)
+    .where(and(eq(promptResearchLists.id, opts.listId), eq(promptResearchLists.projectId, opts.projectId)))
+    .limit(1);
+  if (!list) throw new Error("List not found.");
+  if (list.status === "generating") throw new Error("This list is already being generated.");
+  const existing = await countItems(list.id);
+  if (existing + opts.config.count > MAX_ITEMS_PER_LIST) throw new Error(`A list can hold at most ${MAX_ITEMS_PER_LIST} prompts. Create a new list.`);
+  const job = await enqueueJob(
+    GENERATE_JOB,
+    { projectId: opts.projectId, listId: list.id, config: opts.config, userId: opts.userId, auto: opts.auto ?? false },
+    { projectId: opts.projectId, createdBy: opts.userId, dedupeKey: `prompt-research:${list.id}`, maxAttempts: 1, priority: 50 },
+  );
+  if (!job) throw new Error("A generation for this list is already queued.");
+  await db
+    .update(promptResearchLists)
+    .set({ status: "generating", jobId: job.id, error: null, config: { ...opts.config, autoGenerated: opts.auto ?? false } })
+    .where(eq(promptResearchLists.id, list.id));
+  return { jobId: job.id };
+}
+
+/**
+ * Auto-generates the default list on first visit when brand knowledge exists and the list is
+ * still empty (and was never auto-generated before). Returns the job id when started.
+ */
+export async function autoGenerateDefaultList(projectId: string, userId: string | null): Promise<string | null> {
+  const list = await ensureDefaultList(projectId);
+  if (list.status !== "idle") return null;
+  if ((list.config as Record<string, unknown>)?.autoGenerated) return null;
+  if ((await countItems(list.id)) > 0) return null;
+  if (!(await hasBrandContext(projectId))) return null;
+  const config = await defaultPromptSetConfig(projectId);
+  const { jobId } = await startPromptGeneration({ projectId, listId: list.id, config, userId, auto: true });
+  return jobId;
+}
+
+function normalizeText(t: string) {
+  return t.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/** Job body: generates prompts in batches, stores them, then enriches volumes. */
+export async function runPromptGeneration(
+  payload: { projectId: string; listId: string; config: PromptSetConfig; userId: string | null; auto?: boolean },
+  ctx: JobContext,
+) {
+  const { projectId, listId, userId } = payload;
+  const config = promptSetConfigSchema.parse(payload.config);
+  const [project] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
+  if (!project) throw new Error("Project not found.");
+  const [list] = await db.select().from(promptResearchLists).where(eq(promptResearchLists.id, listId)).limit(1);
+  if (!list) return { skipped: "list deleted" };
+
+  try {
+    const briefing = await brandBriefing(projectId);
+    const profile = await getBrandProfile(projectId);
+    const personasData = await getKnowledge<PersonasData>(projectId, "personas");
+    const personaDetails = (personasData.data?.personas ?? []).filter((p) => config.personas.includes(p.name));
+    const country = getCountry(config.country)?.name ?? config.country;
+    const existing = await db.select({ text: promptResearchItems.text }).from(promptResearchItems).where(eq(promptResearchItems.listId, listId));
+    const seen = new Set(existing.map((e) => normalizeText(e.text)));
+    const produced: string[] = [];
+    const batchSize = 25;
+    const batches = Math.ceil(config.count / batchSize);
+    let created = 0;
+    await ctx.progress({ step: "generating", done: 0, total: config.count, message: "Generating prompts" });
+
+    for (let b = 0; b < batches && created < config.count; b++) {
+      if (await ctx.isCancelled()) break;
+      const want = Math.min(batchSize, config.count - created);
+      // Spread topics over batches (round robin) so every topic gets coverage.
+      const roundRobin = config.topics.filter((_, i) => i % batches === b);
+      const topicSlice = roundRobin.length ? roundRobin : config.topics;
+      const brandedCount = Math.round((want * config.brandedShare) / 100);
+      const recent = produced.slice(-80);
+      const res = await runLlm({
+        purpose: "prompt_research_generate",
+        timeoutMs: 15 * 60_000,
+        projectId,
+        workspaceId: project.workspaceId,
+        userId,
+        system:
+          "You are an expert in AI search (GEO). You write the realistic questions real people type into ChatGPT, Perplexity, Gemini or Google AI Mode — natural, conversational, specific. Never write marketing copy.",
+        prompt: `${briefing}
+${personaDetails.length ? `\nPersonas:\n${personaDetails.map((p) => `- ${p.name} (${p.role}): goals ${p.goals.slice(0, 3).join("; ")}; pains ${p.pains.slice(0, 3).join("; ")}`).join("\n")}` : ""}
+
+Write exactly ${want} distinct prompts in ${languageName(config.language)} that people in ${country} would ask an AI assistant, which are relevant for this brand's visibility.
+Requirements:
+- Topics: ${topicSlice.length ? `focus on these topics: ${topicSlice.join(", ")}` : config.topics.length ? `use these topics: ${config.topics.join(", ")}` : "choose 5–8 meaningful topics yourself (2–3 word names)"}. Put the topic name in "topic" (reuse identical topic names).
+- Funnel stages: only ${config.funnelStages.map((s) => s.toUpperCase()).join(", ")} (TOFU = awareness/problem, MOFU = consideration/comparison, BOFU = decision/purchase). Mix them evenly.
+- Branded: exactly ${brandedCount} of the prompts must explicitly name "${profile.name}" (branded=true); all others must NOT mention the brand (branded=false).
+- ${config.competitorComparisons && config.competitors.length ? `Include a few comparison / alternative prompts naming these competitors: ${config.competitors.join(", ")} (set "competitor" to the name).` : 'Do not name competitors (competitor = null).'}
+- Personas: ${config.personas.length ? `write from the perspective of these personas and set "persona": ${config.personas.join(", ")}` : 'persona = null'}.
+- Length: ${config.lengths.map((l) => LENGTH_HINT[l]).join(" / ")}.
+- "keyword": the 1–4 word Google search keyword that best represents the prompt's topic demand (in ${languageName(config.language)}, no brand unless branded).
+- "relativeVolume": 1–10 estimate how common this kind of question is.
+- "rationale": one short sentence why this prompt matters for the brand.
+${config.instructions ? `- Extra instructions: ${config.instructions}` : ""}
+${recent.length ? `\nDo NOT repeat or paraphrase these already generated prompts:\n${recent.map((t) => `- ${t}`).join("\n")}` : ""}`,
+        schema: batchSchema,
+        maxTokens: 12000,
+      });
+
+      const rows: (typeof promptResearchItems.$inferInsert)[] = [];
+      for (const p of res.data.prompts) {
+        const text = p.text.trim().replace(/\s+/g, " ").slice(0, 1000);
+        const key = normalizeText(text);
+        if (text.length < 8 || seen.has(key)) continue;
+        seen.add(key);
+        produced.push(text);
+        const allowedLength = lengthOf(text);
+        rows.push({
+          listId,
+          projectId,
+          text,
+          topic: p.topic.trim().slice(0, 120) || null,
+          funnelStage: p.funnelStage,
+          persona: p.persona?.trim() || null,
+          intent: p.intent,
+          branded: p.branded || text.toLowerCase().includes(profile.name.toLowerCase()),
+          competitorMentioned: p.competitor?.trim() || null,
+          length: allowedLength,
+          keyword: p.keyword.trim().toLowerCase().slice(0, 80) || null,
+          source: "generated",
+          details: { rationale: p.rationale, relativeVolume: Math.max(1, Math.min(10, p.relativeVolume)) },
+        });
+        if (created + rows.length >= config.count) break;
+      }
+      if (rows.length) {
+        await db.insert(promptResearchItems).values(rows);
+        created += rows.length;
+      }
+      await ctx.progress({ step: "generating", done: created, total: config.count, message: `Generated ${created} of ${config.count} prompts` });
+    }
+
+    await ctx.progress({ step: "volumes", done: created, total: config.count, message: "Estimating volumes" });
+    let volumeSource: string = "none";
+    try {
+      const r = await enrichListVolumes(projectId, listId, {
+        userId,
+        onlyMissing: true,
+        progress: (m) => ctx.progress({ step: "volumes", done: created, total: config.count, message: m }),
+      });
+      volumeSource = r.source;
+    } catch (err) {
+      console.error("[prompt-research] volume enrichment failed", err);
+      volumeSource = `failed: ${err instanceof Error ? err.message : String(err)}`;
+    }
+    await db.update(promptResearchLists).set({ status: "idle", jobId: null, error: null }).where(eq(promptResearchLists.id, listId));
+    await notifyUser({
+      userId,
+      projectId,
+      kind: "prompt_research.generated",
+      title: `${created} prompts ready in "${list.name}"`,
+      body: `Prompt Set Helper finished${volumeSource === "dataforseo" ? " with DataForSEO search volumes" : volumeSource === "estimated" ? " (volumes estimated by AI)" : ""}.`,
+      href: `/p/${projectId}/ai/prompt-research?list=${listId}`,
+    });
+    return { created, volumeSource };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await db.update(promptResearchLists).set({ status: "failed", jobId: null, error: message.slice(0, 1000) }).where(eq(promptResearchLists.id, listId));
+    if (!payload.auto) {
+      await notifyUser({
+        userId,
+        projectId,
+        kind: "prompt_research.failed",
+        title: `Prompt generation failed for "${list.name}"`,
+        body: message.slice(0, 300),
+        href: `/p/${projectId}/ai/prompt-research?list=${listId}`,
+      });
+    }
+    throw err;
+  }
+}

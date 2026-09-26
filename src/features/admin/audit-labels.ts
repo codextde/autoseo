@@ -1,0 +1,70 @@
+/** Human readable labels for audit log actions (isomorphic). Unknown actions are prettified. */
+const LABELS: Record<string, string> = {
+  "auth.login": "Signed in",
+  "auth.login_requested": "Requested a sign-in link",
+  "auth.login_denied": "Sign-in denied",
+  "auth.domain_signup": "Signed up via allowed domain",
+  "setup.completed": "Completed instance setup",
+  "settings.updated": "Updated settings",
+  "invitation.created": "Invited a person",
+  "invitation.accepted": "Accepted an invitation",
+  "invitation.resent": "Resent an invitation",
+  "invitation.link_regenerated": "Generated a new invitation link",
+  "invitation.revoked": "Revoked an invitation",
+  "member.role_changed": "Changed a member's role",
+  "member.removed": "Removed a member",
+  "member.project_access_changed": "Changed project access",
+  "user.updated": "Updated a user",
+  "user.disabled": "Disabled a user",
+  "user.enabled": "Enabled a user",
+  "user.admin_granted": "Granted instance admin",
+  "user.admin_revoked": "Revoked instance admin",
+  "user.deleted": "Deleted a user",
+  "user.sessions_revoked": "Signed a user out everywhere",
+  "session.revoked": "Revoked a session",
+  "role.created": "Created a role",
+  "role.updated": "Updated a role",
+  "role.deleted": "Deleted a role",
+  "role.reset": "Reset a built-in role",
+  "workspace.created": "Created a workspace",
+  "workspace.renamed": "Renamed a workspace",
+  "workspace.deleted": "Deleted a workspace",
+  "project.created": "Created a project",
+  "project.updated": "Updated a project",
+  "project.archived": "Archived a project",
+  "project.restored": "Restored a project",
+  "project.deleted": "Deleted a project",
+  "project.moved": "Moved a project",
+  "project.pitch_set": "Made a pitch project",
+  "project.pitch_converted": "Converted a pitch project",
+  "project.pitch_expired": "Pitch project expired",
+  "branding.asset_uploaded": "Uploaded a branding asset",
+  "email.test_sent": "Sent a test email",
+  "ai.provider_tested": "Tested an AI provider",
+  "job.retried": "Retried a job",
+  "job.cancelled": "Cancelled a job",
+  "system.caches_cleared": "Cleared caches",
+  "system.maintenance_started": "Started maintenance",
+  "feedback.deleted": "Deleted feedback",
+  "audit_log.exported": "Exported the audit log",
+};
+
+export function auditActionLabel(action: string): string {
+  if (LABELS[action]) return LABELS[action];
+  const [scope, verb] = action.split(".");
+  const pretty = (s: string | undefined) => (s ?? "").replace(/_/g, " ");
+  return verb ? `${pretty(scope).replace(/^\w/, (c) => c.toUpperCase())}: ${pretty(verb)}` : pretty(action);
+}
+
+export const AUDIT_CATEGORIES = [
+  { key: "auth", label: "Sign-in" },
+  { key: "settings", label: "Settings" },
+  { key: "invitation", label: "Invitations" },
+  { key: "member", label: "Members" },
+  { key: "user", label: "Users" },
+  { key: "role", label: "Roles" },
+  { key: "workspace", label: "Workspaces" },
+  { key: "project", label: "Projects" },
+  { key: "job", label: "Jobs" },
+  { key: "system", label: "System" },
+] as const;

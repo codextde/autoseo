@@ -1,0 +1,21 @@
+{
+  "name": "autoseo",
+  "owner": {
+    "name": "AutoSEO"
+  },
+  "description": "AutoSEO's Claude Code plugin marketplace (self-hosted AI visibility & SEO).",
+  "plugins": [
+    {
+      "name": "autoseo",
+      "source": "./plugins/autoseo",
+      "description": "AI visibility (GEO) and SEO data for your agent: how ChatGPT, Perplexity and Google AI answer about your brand, plus keyword research, SERPs, backlinks, rank tracking, local SEO and site audits — from your self-hosted AutoSEO.",
+      "category": "SEO",
+      "tags": [
+        "seo",
+        "geo",
+        "ai-visibility",
+        "mcp"
+      ]
+    }
+  ]
+}

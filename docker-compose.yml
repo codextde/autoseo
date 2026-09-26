@@ -1,0 +1,45 @@
+# AutoSEO — Docker Compose (works as-is on Coolify: "Docker Compose" build pack).
+# Only DOMAIN is configurable via .env; everything else is configured in the admin panel.
+services:
+  app:
+    build:
+      context: .
+      args:
+        SOURCE_COMMIT: ${SOURCE_COMMIT:-}
+    restart: unless-stopped
+    environment:
+      # Coolify: set the domain on this service (it also exposes SERVICE_FQDN_APP_3000).
+      - SERVICE_FQDN_APP_3000
+      - DOMAIN=${DOMAIN:-}
+      - DATABASE_URL=postgres://autoseo:${SERVICE_PASSWORD_POSTGRES:-autoseo-local-only}@postgres:5432/autoseo
+      - DATA_DIR=/data
+    volumes:
+      - autoseo-data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=autoseo
+      - POSTGRES_PASSWORD=${SERVICE_PASSWORD_POSTGRES:-autoseo-local-only}
+      - POSTGRES_DB=autoseo
+    volumes:
+      - autoseo-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U autoseo -d autoseo"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  autoseo-data:
+  autoseo-pg:

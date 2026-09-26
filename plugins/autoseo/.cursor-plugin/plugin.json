@@ -1,0 +1,22 @@
+{
+  "name": "autoseo",
+  "version": "1.0.0",
+  "description": "AI visibility (GEO) and SEO data for your agent: how ChatGPT, Perplexity and Google AI answer about your brand, plus keyword research, SERPs, backlinks, rank tracking, local SEO and site audits \u2014 from your self-hosted AutoSEO.",
+  "author": {
+    "name": "AutoSEO"
+  },
+  "keywords": [
+    "seo",
+    "geo",
+    "ai-visibility",
+    "keyword-research",
+    "serp",
+    "site-audit",
+    "backlinks",
+    "search-console",
+    "rank-tracking",
+    "local-seo"
+  ],
+  "skills": "skills",
+  "mcpServers": "mcp.json"
+}

@@ -7,6 +7,7 @@ import { users } from "@/server/db/schema";
 import { actionUser, ActionError, runAction } from "@/server/auth/guards";
 import { actionWorkspace } from "@/server/admin/access";
 import { rateLimit } from "@/server/rate-limit";
+import { createDemoProjectWithinLimit } from "@/server/ai/demo/create";
 import {
   brandInput,
   competitorsInput,
@@ -83,6 +84,17 @@ export async function createOnboardingProjectAction(input: CreateWizardInput) {
       if (err instanceof z.ZodError) throw err;
       throw new ActionError(err instanceof Error ? err.message : "Could not create the project.", "invalid");
     }
+  });
+}
+
+/** "Just looking around?" — skips the wizard and opens a demo project with generated sample data. */
+export async function createOnboardingDemoAction(workspaceId: string) {
+  return runAction(async () => {
+    const access = await actionWorkspace(z.string().min(1).max(40).parse(workspaceId), "projects.manage");
+    if (!rateLimit(`onboarding-demo:${access.ctx.user.id}`, 5, 60 * 60_000)) {
+      throw new ActionError("Too many demo projects created in a short time. Please wait a bit.", "invalid");
+    }
+    return createDemoProjectWithinLimit(access.workspace.id, access.ctx.user);
   });
 }
 

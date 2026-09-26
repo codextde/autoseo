@@ -1,7 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useMemo, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { AnimatePresence, motion } from "motion/react";
 import {
   AlertCircle,
@@ -10,6 +12,7 @@ import {
   Check,
   Cloud,
   Globe,
+  Loader2,
   Pencil,
   Plus,
   RefreshCw,
@@ -38,6 +41,7 @@ import type { Translate } from "../i18n";
 import type { Locale, OnboardingPageData, WizardDraft, WizardStepOrCreate } from "../types";
 import { cleanDomainInput, emailAllowed, isDomain, isEmail, nameFromDomain, uid } from "../lib";
 import { CountryPicker, LanguageSelect } from "./market-fields";
+import { createOnboardingDemoAction } from "../actions";
 
 export type AiState = { status: "idle" | "loading" | "done" | "unavailable" | "failed" | "dismissed"; message?: string };
 
@@ -148,7 +152,40 @@ export function AiBanner({
 
 const PITCH_DAYS = [7, 14, 30, 60, 90];
 
-export function WebsiteStep({ draft, update, t, locale, data, showErrors }: StepProps) {
+/** Lets first-time users explore a demo project before configuring AI providers or DataForSEO. */
+function DemoShortcut({ workspaceId, t }: { workspaceId: string; t: Translate }) {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  return (
+    <div className="flex flex-col gap-3 rounded-2xl border border-dashed p-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="space-y-0.5">
+        <p className="text-sm font-medium">{t("website.demoTitle")}</p>
+        <p className="text-xs leading-relaxed text-muted-foreground">{t("website.demoText")}</p>
+      </div>
+      <Button
+        type="button"
+        variant="outline"
+        className="shrink-0"
+        disabled={pending || !workspaceId}
+        onClick={() =>
+          start(async () => {
+            const res = await createOnboardingDemoAction(workspaceId);
+            if (!res.ok) {
+              toast.error(res.error);
+              return;
+            }
+            router.push(`/p/${res.data.projectId}`);
+          })
+        }
+      >
+        {pending ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
+        {pending ? t("website.demoLoading") : t("website.demoButton")}
+      </Button>
+    </div>
+  );
+}
+
+export function WebsiteStep({ draft, update, t, locale, data, preview, showErrors }: StepProps) {
   const c = data.config;
   const domain = cleanDomainInput(draft.domain);
   const valid = isDomain(domain);
@@ -269,6 +306,8 @@ export function WebsiteStep({ draft, update, t, locale, data, showErrors }: Step
             </AnimatePresence>
           </div>
         )}
+
+        {!data.hasProjects && !preview && <DemoShortcut workspaceId={draft.workspaceId} t={t} />}
       </div>
     </div>
   );

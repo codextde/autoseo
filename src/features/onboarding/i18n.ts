@@ -26,6 +26,10 @@ const en = {
   "website.pitch": "Pitch project",
   "website.pitchHint": "A temporary project for a sales pitch — archived automatically when it expires.",
   "website.pitchDays": "Expires after",
+  "website.demoTitle": "Just looking around?",
+  "website.demoText": "Open a demo project with 90 days of sample data. No setup, no provider credits.",
+  "website.demoButton": "Explore the demo",
+  "website.demoLoading": "Generating demo data…",
   days: "days",
 
   "market.title": "Where do you want to be visible?",
@@ -175,6 +179,10 @@ const de: Record<I18nKey, string> = {
   "website.pitch": "Pitch-Projekt",
   "website.pitchHint": "Ein temporäres Projekt für einen Pitch – wird nach Ablauf automatisch archiviert.",
   "website.pitchDays": "Läuft ab nach",
+  "website.demoTitle": "Erst mal umsehen?",
+  "website.demoText": "Öffnen Sie ein Demo-Projekt mit 90 Tagen Beispieldaten. Ohne Einrichtung, ohne Anbieterkosten.",
+  "website.demoButton": "Demo ansehen",
+  "website.demoLoading": "Demo-Daten werden erzeugt…",
   days: "Tagen",
 
   "market.title": "Wo möchten Sie sichtbar sein?",

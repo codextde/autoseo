@@ -14,11 +14,11 @@ import {
 import { getAnswerDetail } from "@/server/ai/insights/answers";
 import { getAdDetail } from "@/server/ai/insights/ads";
 import { parseInsightFilter } from "@/server/ai/insights/filters";
-import { createDemoProject } from "@/server/ai/demo/generate";
+import { createDemoProjectWithinLimit } from "@/server/ai/demo/create";
 import { db } from "@/server/db/client";
-import { projects, users } from "@/server/db/schema";
+import { users } from "@/server/db/schema";
 import { CHECKLIST_STEPS } from "@/server/ai/insights/dashboard";
-import { and, count, eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
 const idSchema = z.string().trim().min(1).max(64).regex(/^[a-z0-9_-]+$/i);
 
@@ -130,30 +130,11 @@ export async function getAdDetailAction(projectId: string, adId: string, filters
   });
 }
 
-const MAX_DEMO_PROJECTS = 3;
-
 /** Creates a clearly labelled "Demo · …" project with generated sample data in the same workspace. */
 export async function createDemoProjectAction(projectId: string) {
   return runAction(async () => {
     const ctx = await actionProject(idSchema.parse(projectId), "projects.manage");
-    const [existing] = await db
-      .select({ n: count() })
-      .from(projects)
-      .where(and(eq(projects.workspaceId, ctx.project.workspaceId), eq(projects.archived, false), sql`${projects.settings}->>'demo' = 'true'`));
-    if ((existing?.n ?? 0) >= MAX_DEMO_PROJECTS)
-      throw new ActionError(`This workspace already has ${MAX_DEMO_PROJECTS} demo projects. Delete one in the project settings first.`, "conflict");
-    const result = await createDemoProject(ctx.project.workspaceId, ctx.user.id).catch((e: unknown) => {
-      throw new ActionError(e instanceof Error ? e.message : "Could not create the demo project.", "error");
-    });
-    void logAudit("project.demo_created", {
-      actor: ctx.user,
-      targetType: "project",
-      targetId: result.projectId,
-      workspaceId: ctx.project.workspaceId,
-      projectId: result.projectId,
-      meta: result.stats,
-    });
-    return { projectId: result.projectId };
+    return createDemoProjectWithinLimit(ctx.project.workspaceId, ctx.user);
   });
 }
 

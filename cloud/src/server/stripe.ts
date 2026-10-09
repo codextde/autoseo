@@ -22,6 +22,7 @@ import {
   classifyCheckout,
   complimentaryAfterSubscription,
   instanceTransition,
+  isOwnCheckout,
   isProcessedCheckout,
   isSubscriptionLive,
   shouldApplySubscription,
@@ -801,6 +802,10 @@ async function recreateReservation(session: Stripe.Checkout.Session): Promise<In
  */
 export async function processCheckoutSession(session: Stripe.Checkout.Session, source: string): Promise<Instance | null> {
   if (session.mode !== "subscription" || session.status !== "complete") return null;
+  if (!isOwnCheckout(session)) {
+    await logEvent("stripe.checkout_foreign", { data: { sessionId: session.id, source } });
+    return null;
+  }
   const instanceId = session.metadata?.instanceId;
   const existing = instanceId ? await getInstance(instanceId) : null;
   const instance = existing && existing.status !== "deleted" ? existing : await recreateReservation(session);

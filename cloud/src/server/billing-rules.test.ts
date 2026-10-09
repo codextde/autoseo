@@ -3,6 +3,7 @@ import {
   classifyCheckout,
   complimentaryAfterSubscription,
   instanceTransition,
+  isOwnCheckout,
   isReleasableReservation,
   isProcessedCheckout,
   isSubscriptionLive,
@@ -145,5 +146,18 @@ describe("complimentary instances", () => {
     expect(isReleasableReservation({ status: "pending_payment", complimentary: true, createdAt: old }, now, ttl)).toBe(false);
     expect(isReleasableReservation({ status: "pending_payment", complimentary: false, createdAt: new Date(now - 47 * 3600_000) }, now, ttl)).toBe(false);
     expect(isReleasableReservation({ status: "running", complimentary: false, createdAt: old }, now, ttl)).toBe(false);
+  });
+});
+
+describe("isOwnCheckout (shared Stripe account)", () => {
+  it("accepts checkouts created by AutoSEO Cloud", () => {
+    expect(isOwnCheckout({ metadata: { instanceId: "i1", userId: "u1", slug: "acme" } })).toBe(true);
+  });
+  it.each([
+    ["another product's checkout", { metadata: { plan: "monthly", license_key: "GM-XXXX" } }],
+    ["no metadata", { metadata: null }],
+    ["instance without user", { metadata: { instanceId: "i1" } }],
+  ])("ignores %s", (_, session) => {
+    expect(isOwnCheckout(session)).toBe(false);
   });
 });

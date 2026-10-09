@@ -113,3 +113,11 @@ export function isReleasableReservation(
 ): boolean {
   return instance.status === "pending_payment" && !instance.complimentary && now - instance.createdAt.getTime() > ttlMs;
 }
+
+/**
+ * The Stripe account is shared with other Codext products. Only checkouts created here carry an instanceId and
+ * userId; any other checkout belongs to another product and must be left alone (never canceled as an orphan).
+ */
+export function isOwnCheckout(session: { metadata?: Record<string, string> | null }): boolean {
+  return Boolean(session.metadata?.instanceId && session.metadata?.userId);
+}

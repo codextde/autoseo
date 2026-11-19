@@ -101,14 +101,6 @@ export type RankCheckResult = {
 
 type RankLocation = { locationCode: number; languageCode: string; locationName?: string | null };
 
-/** Stop crawling once the target is found (only pages crawled are billed). */
-function stopCrawlOnTarget(domain: string) {
-  return {
-    stop_crawl_on_match: [{ match_value: domain, match_type: "with_subdomains" }],
-    find_targets_in: ["organic"],
-  };
-}
-
 function locationParams(loc: RankLocation) {
   return loc.locationName ? { location_name: loc.locationName } : { location_code: loc.locationCode };
 }
@@ -123,7 +115,9 @@ export function buildRankCheckTask(
     device: input.device,
     os: input.device === "desktop" ? "windows" : "android",
     depth: clampSerpDepth(input.depth),
-    ...stopCrawlOnTarget(input.targetDomain),
+    // DataForSEO swaps in Google's plain web results when Google served a poisoned page (goto links, wrong sites).
+    // Costs one more first-page SERP per check (see costPerRankCheck* in rank-tracking).
+    resolve_poisoned_results: true,
   };
 }
 
@@ -144,6 +138,19 @@ export function buildRankCheckTaskPostBody(
   }));
 }
 
+/** Google's /goto redirect results report domain "google.com": the real host is in the `url` param, else the breadcrumb. */
+export function organicHost(i: SerpLiveItem): string | undefined {
+  if (i.domain && !/^(www\.)?google\./i.test(i.domain)) return i.domain;
+  try {
+    const u = new URL(i.url ?? "");
+    const real = u.searchParams.get("url") ?? u.searchParams.get("q");
+    if (/^(www\.)?google\./i.test(u.hostname) && real) return new URL(real).hostname;
+  } catch {
+    // not a parsable URL: fall through to the breadcrumb
+  }
+  return i.breadcrumb?.match(/^(?:https?:\/\/)?([^\s/›]+)/)?.[1] ?? i.domain ?? undefined;
+}
+
 /**
  * First organic item whose domain equals the target or is a subdomain of it.
  * position = rank_group (organic-only rank) ?? rank_absolute. serpFeatures = unique item types.
@@ -155,8 +162,9 @@ export function buildRankCheckResult(
   const target = input.targetDomain.toLowerCase();
   const list = items.filter((i): i is SerpLiveItem => i != null);
   const match = list.find((i) => {
-    if (i.type !== "organic" || i.domain == null) return false;
-    const d = i.domain.toLowerCase();
+    if (i.type !== "organic") return false;
+    const d = organicHost(i)?.toLowerCase();
+    if (!d) return false;
     return d === target || d.endsWith(`.${target}`);
   });
   return {

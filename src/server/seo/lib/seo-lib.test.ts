@@ -45,6 +45,8 @@ import {
   computeNextCheckAt,
   computeScorecards,
   estimateRankCheckCost,
+  isSuspectMiss,
+  needsSecondRead,
   estimateScheduledRankCheckCost,
   normalizeTrackedKeywords,
   normalizeTrackerDomain,
@@ -281,7 +283,7 @@ describe("keyword research payloads + mappers", () => {
 });
 
 describe("SERP + rank checks", () => {
-  it("builds analysis + rank check payloads (stop_crawl_on_match, os per device, clamped depth)", () => {
+  it("builds analysis + rank check payloads (no stop_crawl, os per device, clamped depth)", () => {
     expect(buildSerpAnalysisTask({ keyword: "k", locationCode: 2840, languageCode: "en", depth: 5 })).toEqual({
       keyword: "k",
       location_code: 2840,
@@ -299,8 +301,7 @@ describe("SERP + rank checks", () => {
       device: "mobile",
       os: "android",
       depth: 40,
-      stop_crawl_on_match: [{ match_value: "example.com", match_type: "with_subdomains" }],
-      find_targets_in: ["organic"],
+      resolve_poisoned_results: true,
     });
     const body = buildRankCheckTaskPostBody({
       tasks: [
@@ -313,7 +314,7 @@ describe("SERP + rank checks", () => {
       targetDomain: "example.com",
     });
     expect(body.map((t) => t.tag)).toEqual(["kw-1:desktop", "kw-1:mobile"]);
-    expect(body[0]).toMatchObject({ location_code: 2840, os: "windows" });
+    expect(body[0]).toMatchObject({ location_code: 2840, os: "windows", resolve_poisoned_results: true });
     expect(() => buildRankCheckTaskPostBody({ tasks: [], locationCode: 1, languageCode: "en", depth: 10, targetDomain: "x.com" })).toThrow();
   });
 
@@ -344,12 +345,29 @@ describe("SERP + rank checks", () => {
     ]);
   });
 
+  it("matches Google /goto results by the real host, not domain google.com", () => {
+    const input = { keywordId: "k", keyword: "kw", targetDomain: "instahelp.me" };
+    const goto = (url: string, breadcrumb?: string) => ({ type: "organic", rank_group: 3, domain: "google.com", url, breadcrumb });
+    const viaUrl = goto("https://www.google.com/goto?url=https%3A%2F%2Fwww.instahelp.me%2Fpsychologe%2F");
+    expect(buildRankCheckResult(input, [viaUrl]).position).toBe(3);
+    expect(buildRankCheckResult(input, [goto("https://www.google.com/goto", "https://www.instahelp.me › psychologe")]).position).toBe(3);
+    expect(buildRankCheckResult(input, [goto("https://www.google.com/goto?url=https%3A%2F%2Fother.com%2F")]).position).toBeNull();
+  });
+
+  it("reads again only when no page came back or a ranked keyword was missed", () => {
+    expect(needsSecondRead(undefined, false)).toBe(true);
+    expect(needsSecondRead(null, true)).toBe(true);
+    expect(needsSecondRead(null, false)).toBe(false);
+    expect(needsSecondRead(3, true)).toBe(false);
+    expect(isSuspectMiss(undefined, true)).toBe(false);
+  });
+
   it("estimates rank-check costs per metered call", () => {
-    // live: 1 keyword × 2 devices × (0.002 + 3 × 0.0015) at depth 40
-    expect(estimateRankCheckCost(1, "both", 40, "live")).toEqual({ costUsd: 0.013, totalChecks: 2 });
-    // queued: 150 checks at depth 10 = 100 + 50 per task_post × 0.0006
-    expect(estimateRankCheckCost(150, "desktop", 10, "queued").costUsd).toBeCloseTo(0.09, 5);
-    expect(estimateScheduledRankCheckCost(50, "mobile", 10, "weekly")).toMatchObject({ checksPerMonth: 4, costUsd: 0.03, monthlyCostUsd: 0.12 });
+    // live: 1 keyword × 2 devices × (0.002 + 3 × 0.0015 + 0.002 resolve_poisoned_results) at depth 40
+    expect(estimateRankCheckCost(1, "both", 40, "live")).toEqual({ costUsd: 0.017, totalChecks: 2 });
+    // queued: 150 checks at depth 10 = 100 + 50 per task_post × 0.0012 (SERP + resolve_poisoned_results)
+    expect(estimateRankCheckCost(150, "desktop", 10, "queued").costUsd).toBeCloseTo(0.18, 5);
+    expect(estimateScheduledRankCheckCost(50, "mobile", 10, "weekly")).toMatchObject({ checksPerMonth: 4, costUsd: 0.06, monthlyCostUsd: 0.24 });
   });
 
   it("advances schedules on a fixed anchor without drift", () => {
@@ -527,6 +545,7 @@ describe("local SEO", () => {
     const item = matchGridItem([{ title: "Joe's Pizza", cid: "1" }, { title: "Other", cid: "2", place_id: "p2" }], { placeId: "p2" });
     expect(item).toMatchObject({ cid: "2" });
     expect(matchGridItem([{ title: "Joe's Pizza Berlin" }], { name: "joe's pizza" })).toBeTruthy();
+    expect(matchGridItem([{ title: "Joe's Pizza Berlin", cid: "9" }], { cid: "1", name: "joe's pizza" })).toBeUndefined();
     expect(summarizeGrid([{ row: 0, col: 0, latitude: 0, longitude: 0, rank: 2 }, { row: 0, col: 1, latitude: 0, longitude: 0, rank: 11 }, { row: 0, col: 2, latitude: 0, longitude: 0, rank: null }])).toEqual({
       pointsSearched: 3,
       pointsFound: 2,

@@ -1,5 +1,5 @@
 import "server-only";
-import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { db } from "@/server/db/client";
 import { projects, seoRankConfigs, seoRankKeywords, seoRankRuns, seoRankSnapshots, seoRankTasks } from "@/server/db/schema";
 import { enqueueJob } from "@/server/jobs/queue";
@@ -18,13 +18,16 @@ import {
 } from "./rank-tracking";
 import {
   computeNextCheckAt,
-  costPerSerpAtDepth,
+  costPerLiveRankCheck,
   devicesCount,
   devicesList,
   estimateRankCheckCost,
   isScheduledInterval,
+  isSuspectMiss,
   KEYWORDS_PER_BATCH,
+  MAX_READS_PER_CHECK,
   MAX_TASKS_PER_POST,
+  needsSecondRead,
   QUEUED_POLL_INTERVALS_MIN,
   SCHEDULED_TASK_UNIT_BUDGET,
   TASK_GET_CONCURRENCY,
@@ -33,6 +36,7 @@ import {
 } from "./lib/rank-tracking";
 import {
   buildRankCheckResult,
+  organicHost,
   buildRankCheckTask,
   buildRankCheckTaskPostBody,
   isNoResultsMessage,
@@ -100,7 +104,12 @@ async function insertSnapshots(runId: string, results: (RankCheckResult & { devi
         serpFeatures: r.serpFeatures,
       })),
     )
-    .onConflictDoNothing();
+    // A second read only replaces a miss, or a worse position, with a better one.
+    .onConflictDoUpdate({
+      target: [seoRankSnapshots.runId, seoRankSnapshots.trackingKeywordId, seoRankSnapshots.device],
+      set: { position: sql`excluded.position`, url: sql`excluded.url`, serpFeatures: sql`excluded.serp_features` },
+      setWhere: sql`excluded.position IS NOT NULL AND (${seoRankSnapshots.position} IS NULL OR excluded.position < ${seoRankSnapshots.position})`,
+    });
 }
 
 async function refreshProgress(runId: string) {
@@ -117,6 +126,14 @@ async function enqueueContinuation(run: RankRun, type: string, delayMs = 0) {
 
 /* ───────────────────────────── Live checks ───────────────────────────── */
 
+/** A miss leaves no trace otherwise: log what came back so "not found" can be told from "empty / wrong SERP". */
+function logMiss(runId: string, r: RankCheckResult, device: Device, domain: string, items: SerpLiveItem[]) {
+  if (r.position !== null) return;
+  const organic = items.filter((i) => i?.type === "organic");
+  const top = organic.slice(0, 5).map((i) => `${organicHost(i) ?? "?"} <${i.domain}> url=${i.url?.slice(0, 120)} crumb=${i.breadcrumb?.slice(0, 60)}`).join(" | ");
+  console.log(`[rank-check] ${runId} miss keyword="${r.keyword}" device=${device} target=${domain} items=${items.length} organic=${organic.length} top=[${top}]`);
+}
+
 async function checkPairsLive(ctx: SeoContext, run: RankRun, config: RankConfig, pairs: Pair[]): Promise<number> {
   if (await rankChecksUseAi(ctx.workspaceId)) return checkPairsViaAi(ctx, run, config, pairs);
   const settled = await Promise.allSettled(
@@ -124,20 +141,27 @@ async function checkPairsLive(ctx: SeoContext, run: RankRun, config: RankConfig,
       const task = await dfsLive<{ items?: SerpLiveItem[] | null }>(
         ctx,
         SERP_LIVE_PATH,
-        buildRankCheckTask({
-          keyword: p.keyword,
-          locationCode: config.locationCode,
-          languageCode: config.languageCode,
-          locationName: config.locationName,
-          device: p.device,
-          targetDomain: config.domain,
-          depth: config.serpDepth,
-        }),
+        {
+          ...buildRankCheckTask({
+            keyword: p.keyword,
+            locationCode: config.locationCode,
+            languageCode: config.languageCode,
+            locationName: config.locationName,
+            device: p.device,
+            targetDomain: config.domain,
+            depth: config.serpDepth,
+          }),
+          // Poisoned SERPs link results through google.com/goto: resolve them so the stored URL is the real page.
+          resolve_goto_urls: true,
+        },
         // Billed → no 5xx retries; "No Search Results" (40501) is a valid empty SERP.
-        { feature: "rank_tracking", treatNoResultsAsEmpty: true, retry5xx: false, estimatedCostUsd: costPerSerpAtDepth(config.serpDepth, "live") },
+        { feature: "rank_tracking", treatNoResultsAsEmpty: true, retry5xx: false, estimatedCostUsd: costPerLiveRankCheck(config.serpDepth), timeoutMs: 280_000 },
       );
       await addRunCost(run.id, task.cost);
-      return { ...buildRankCheckResult({ keywordId: p.keywordId, keyword: p.keyword, targetDomain: config.domain }, task.result[0]?.items ?? []), device: p.device };
+      const items = task.result[0]?.items ?? [];
+      const r = buildRankCheckResult({ keywordId: p.keywordId, keyword: p.keyword, targetDomain: config.domain }, items);
+      logMiss(run.id, r, p.device, config.domain, items);
+      return { ...r, device: p.device };
     }),
   );
   const results: (RankCheckResult & { device: Device })[] = [];
@@ -218,16 +242,12 @@ async function phaseLive(ctx: SeoContext, run: RankRun, config: RankConfig, dead
   return "done";
 }
 
-/** task_post in chunks of ≤100 pairs; rows are claimed before posting; rejected / failed chunks → live fallback. */
-async function phasePost(ctx: SeoContext, run: RankRun, config: RankConfig) {
-  const keywords = await runKeywords(run);
-  const pairs = expand(keywords, config.devices);
-  const existing = await db
-    .select({ trackingKeywordId: seoRankTasks.trackingKeywordId, device: seoRankTasks.device })
-    .from(seoRankTasks)
-    .where(eq(seoRankTasks.runId, run.id));
-  const done = new Set(existing.map((e) => rankTaskTag(e.trackingKeywordId, e.device)));
-  const todo = pairs.filter((p) => !done.has(rankTaskTag(p.keywordId, p.device)));
+/**
+ * task_post in chunks of ≤100 pairs; rows are claimed before posting. Rejected / failed chunks go to the live
+ * fallback, or for second reads (`onFail: "failed"`) are dropped: the first read's result stands.
+ */
+async function postPairs(ctx: SeoContext, run: RankRun, config: RankConfig, todo: Pair[], onFail: "fallback" | "failed"): Promise<number> {
+  const failed = { status: onFail } as const;
   let queued = 0;
   for (let i = 0; i < todo.length; i += MAX_TASKS_PER_POST) {
     const chunk = todo.slice(i, i + MAX_TASKS_PER_POST);
@@ -263,7 +283,7 @@ async function phasePost(ctx: SeoContext, run: RankRun, config: RankConfig) {
         const id = accepted.get(rankTaskTag(p.keywordId, p.device));
         await db
           .update(seoRankTasks)
-          .set(id ? { taskId: id } : { status: "fallback", message: "Rejected by task_post" })
+          .set(id ? { taskId: id } : { ...failed, message: "Rejected by task_post" })
           .where(and(eq(seoRankTasks.runId, run.id), eq(seoRankTasks.trackingKeywordId, p.keywordId), eq(seoRankTasks.device, p.device)));
         if (id) queued++;
       }
@@ -274,7 +294,7 @@ async function phasePost(ctx: SeoContext, run: RankRun, config: RankConfig) {
       await setRunErrorIfEmpty(run.id, err instanceof Error ? err.message : String(err));
       await db
         .update(seoRankTasks)
-        .set({ status: "fallback", message: "task_post failed" })
+        .set({ ...failed, message: "task_post failed" })
         .where(
           and(
             eq(seoRankTasks.runId, run.id),
@@ -288,9 +308,85 @@ async function phasePost(ctx: SeoContext, run: RankRun, config: RankConfig) {
         );
     }
   }
+  return queued;
+}
+
+async function phasePost(ctx: SeoContext, run: RankRun, config: RankConfig) {
+  const keywords = await runKeywords(run);
+  const pairs = expand(keywords, config.devices);
+  const existing = await db
+    .select({ trackingKeywordId: seoRankTasks.trackingKeywordId, device: seoRankTasks.device })
+    .from(seoRankTasks)
+    .where(eq(seoRankTasks.runId, run.id));
+  const done = new Set(existing.map((e) => rankTaskTag(e.trackingKeywordId, e.device)));
+  const queued = await postPairs(ctx, run, config, pairs.filter((p) => !done.has(rankTaskTag(p.keywordId, p.device))), "fallback");
   const stats = { ...(run.stats ?? {}), queueTasks: (run.stats?.queueTasks ?? 0) + queued };
   await updateRun(run.id, { phase: "collect", collectRound: 0, stats });
   await enqueueContinuation({ ...run, stats }, RANK_COLLECT_JOB, QUEUED_POLL_INTERVALS_MIN[0] * 60_000);
+}
+
+/**
+ * This run's positions per "keywordId:device" (null = missed, absent = no page came back) and the keywords that
+ * ranked in an earlier completed check or on either device in this run: a miss on one of those is suspect.
+ */
+async function loadReadState(run: RankRun) {
+  const snaps = await db
+    .select({ keywordId: seoRankSnapshots.trackingKeywordId, device: seoRankSnapshots.device, position: seoRankSnapshots.position })
+    .from(seoRankSnapshots)
+    .where(eq(seoRankSnapshots.runId, run.id));
+  const earlier = await db
+    .selectDistinct({ keywordId: seoRankSnapshots.trackingKeywordId })
+    .from(seoRankSnapshots)
+    .innerJoin(seoRankRuns, eq(seoRankRuns.id, seoRankSnapshots.runId))
+    .where(and(eq(seoRankRuns.configId, run.configId), eq(seoRankRuns.status, "completed"), sql`${seoRankSnapshots.position} IS NOT NULL`));
+  const positions = new Map(snaps.map((s) => [rankTaskTag(s.keywordId, s.device), s.position]));
+  const ranked = new Set([...earlier.map((e) => e.keywordId), ...snaps.filter((s) => s.position !== null).map((s) => s.keywordId)]);
+  return { positions, ranked };
+}
+
+/**
+ * Google serves some scraped searches a fake results page that leaves out sites that really rank. DataForSEO
+ * replaces most (resolve_poisoned_results); a pair that got no page back, or missed a keyword that ranked before,
+ * is read once more through the queue. The best position wins. Returns false when no pair needs it.
+ */
+async function phaseReread(ctx: SeoContext, run: RankRun, config: RankConfig): Promise<boolean> {
+  if ((run.stats?.reads ?? 1) >= MAX_READS_PER_CHECK) return false;
+  const { positions, ranked } = await loadReadState(run);
+  const todo = expand(await runKeywords(run), config.devices).filter((p) =>
+    needsSecondRead(positions.get(rankTaskTag(p.keywordId, p.device)), ranked.has(p.keywordId)),
+  );
+  if (!todo.length) return false;
+  console.log(`[rank-check] ${run.id} read 2: ${todo.length} check(s)`);
+  // Claim first: reads is set before posting so a crash never bills a second read twice.
+  const stats = { ...(run.stats ?? {}), reads: 2 };
+  await updateRun(run.id, { stats });
+  for (let i = 0; i < todo.length; i += MAX_TASKS_PER_POST) {
+    await db
+      .update(seoRankTasks)
+      .set({ taskId: null, status: "pending", message: null })
+      .where(
+        and(
+          eq(seoRankTasks.runId, run.id),
+          or(...todo.slice(i, i + MAX_TASKS_PER_POST).map((p) => and(eq(seoRankTasks.trackingKeywordId, p.keywordId), eq(seoRankTasks.device, p.device)))),
+        ),
+      );
+  }
+  const queued = await postPairs(ctx, run, config, todo, "failed");
+  await updateRun(run.id, { phase: "collect", collectRound: 0, stats: { ...stats, queueTasks: (stats.queueTasks ?? 0) + queued } });
+  await enqueueContinuation(run, RANK_COLLECT_JOB, QUEUED_POLL_INTERVALS_MIN[0] * 60_000);
+  return true;
+}
+
+/** After second reads: a miss on a keyword that ranked is dropped, so the pair reads as not checked and keeps its previous position. */
+async function dropSuspectMisses(run: RankRun) {
+  const { positions, ranked } = await loadReadState(run);
+  for (const [tag, position] of positions) {
+    const [keywordId, device] = tag.split(":") as [string, Device];
+    if (!isSuspectMiss(position, ranked.has(keywordId))) continue;
+    await db
+      .delete(seoRankSnapshots)
+      .where(and(eq(seoRankSnapshots.runId, run.id), eq(seoRankSnapshots.trackingKeywordId, keywordId), eq(seoRankSnapshots.device, device), isNull(seoRankSnapshots.position)));
+  }
 }
 
 type TaskOutcome = { status: "pending" } | { status: "failed"; message: string } | { status: "completed"; items: SerpLiveItem[] };
@@ -346,13 +442,12 @@ export async function collectQueuedRound(runId: string) {
       if (o.status === "rejected" || o.value.status === "pending") continue;
       if (o.value.status === "failed") {
         await setRunErrorIfEmpty(run.id, o.value.message);
-        await db.update(seoRankTasks).set({ status: "fallback", message: o.value.message }).where(eq(seoRankTasks.id, t.id));
+        await db.update(seoRankTasks).set({ status: run.stats?.reads === 2 ? "failed" : "fallback", message: o.value.message }).where(eq(seoRankTasks.id, t.id));
         continue;
       }
-      results.push({
-        ...buildRankCheckResult({ keywordId: t.trackingKeywordId, keyword: t.keyword, targetDomain: config.domain }, o.value.items),
-        device: t.device,
-      });
+      const r = buildRankCheckResult({ keywordId: t.trackingKeywordId, keyword: t.keyword, targetDomain: config.domain }, o.value.items);
+      logMiss(run.id, r, t.device, config.domain, o.value.items);
+      results.push({ ...r, device: t.device });
       await db.update(seoRankTasks).set({ status: "completed" }).where(eq(seoRankTasks.id, t.id));
     }
     await insertSnapshots(run.id, results);
@@ -372,7 +467,7 @@ export async function collectQueuedRound(runId: string) {
   // Window closed (≈15 min): everything unfinished — plus claimed-but-never-posted rows — goes to the live fallback.
   await db
     .update(seoRankTasks)
-    .set({ status: "fallback", message: "Not collected within the polling window" })
+    .set({ status: run.stats?.reads === 2 ? "failed" : "fallback", message: "Not collected within the polling window" })
     .where(and(eq(seoRankTasks.runId, run.id), eq(seoRankTasks.status, "pending")));
   await updateRun(run.id, { phase: "fallback", stats });
   await enqueueContinuation(run, RANK_CHECK_JOB);
@@ -471,6 +566,8 @@ export async function executeRankCheck(runId: string) {
         await enqueueContinuation(fresh, RANK_CHECK_JOB);
         return { continued: true };
       }
+      if (run.method === "queued" && !(await rankChecksUseAi(ctx.workspaceId)) && (await phaseReread(ctx, fresh, config))) return { reread: true };
+      if (fresh.stats?.reads === 2) await dropSuspectMisses(fresh);
       await finalize(fresh);
       return { done: true };
     }

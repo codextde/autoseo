@@ -215,6 +215,8 @@ export type SeoRankRunStats = {
   fallbackChecked?: number;
   /** Live path: keywords already claimed (a crash never re-bills a claimed batch). */
   liveCursor?: number;
+  /** Queued path: 2 once second reads were posted (see phaseReread). */
+  reads?: number;
 };
 
 export const seoRankRuns = pgTable(

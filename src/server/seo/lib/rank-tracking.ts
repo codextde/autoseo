@@ -55,6 +55,29 @@ export function costPerSerpAtDepth(depth: number, method: RankCheckMethod): numb
     : LIVE_BASE_PAGE_COST_USD + (pages - 1) * LIVE_EXTRA_PAGE_COST_USD;
 }
 
+/** Reads a keyword/device gets in one check: the first, and a second when it got no page back or missed a keyword that ranked. */
+export const MAX_READS_PER_CHECK = 2;
+
+/** Google serves some scraped searches a fake page that leaves out sites that really rank: a miss on a keyword that ranked is suspect. */
+export function isSuspectMiss(position: number | null | undefined, keywordRanked: boolean): boolean {
+  return position === null && keywordRanked;
+}
+
+/** `position` undefined = no page came back for the first read. */
+export function needsSecondRead(position: number | null | undefined, keywordRanked: boolean): boolean {
+  return position === undefined || isSuspectMiss(position, keywordRanked);
+}
+
+/** Queued rank check read: a standard-queue SERP plus the first-page price resolve_poisoned_results adds per task. */
+export function costPerRankCheckRead(depth: number): number {
+  return costPerSerpAtDepth(depth, "queued") + QUEUED_BASE_PAGE_COST_USD;
+}
+
+/** Live rank check: a live SERP plus the first-page price resolve_poisoned_results adds. */
+export function costPerLiveRankCheck(depth: number): number {
+  return costPerSerpAtDepth(depth, "live") + LIVE_BASE_PAGE_COST_USD;
+}
+
 /** Per metered call rounding (live: 1 check per call; queued: ≤100 checks per task_post). */
 export function estimateRankCheckCost(keywordCount: number, devices: RankDevices, depth: number, method: RankCheckMethod) {
   const totalChecks = keywordCount * devicesCount(devices);
@@ -62,7 +85,7 @@ export function estimateRankCheckCost(keywordCount: number, devices: RankDevices
   let costUsd = 0;
   for (let offset = 0; offset < totalChecks; offset += perCall) {
     const checks = Math.min(perCall, totalChecks - offset);
-    costUsd += roundUsd(checks * costPerSerpAtDepth(depth, method));
+    costUsd += roundUsd(checks * (method === "queued" ? costPerRankCheckRead(depth) : costPerLiveRankCheck(depth)));
   }
   return { costUsd: roundUsd(costUsd), totalChecks };
 }

@@ -261,7 +261,7 @@ case "$AUTOSTART" in
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>10</integer>
-  <key>ProcessType</key><string>Background</string>
+  <key>ProcessType</key><string>Standard</string>
   <key>ExitTimeOut</key><integer>30</integer>
   <key>StandardOutPath</key><string>$(xml_escape "$INSTALL_DIR/logs/launchd.log")</string>
   <key>StandardErrorPath</key><string>$(xml_escape "$INSTALL_DIR/logs/launchd.log")</string>

@@ -314,9 +314,10 @@ export function buildRankGridPoints(center: { latitude: number; longitude: numbe
   return points;
 }
 
-/** Match by cid → place_id → title contains name (case-insensitive). */
+/** Match by cid → place_id; title contains name (case-insensitive) only when no id was given. */
 export function matchGridItem(items: unknown[], target: { cid?: string; placeId?: string; name?: string }): unknown {
-  const name = target.name?.toLowerCase();
+  // With an id, a title match can be a different business with a similar name.
+  const name = target.cid || target.placeId ? undefined : target.name?.toLowerCase();
   return items.find((item) => {
     if (target.cid != null && target.cid !== "" && readPath(item, "cid") === target.cid) return true;
     if (target.placeId != null && target.placeId !== "" && readPath(item, "place_id") === target.placeId) return true;
